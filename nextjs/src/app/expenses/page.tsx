@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { createSPAClient } from "@/lib/supabase/client";
 
 type ExpenseRow = {
@@ -82,21 +83,19 @@ function monthBoundsISO(which: "this" | "last") {
 
   if (which === "this") {
     const start = firstDayOfMonthISO(y, m);
-    // next month
-    const nextMonthDate = new Date(y, m, 1); // JS month is 0-based; y,m => next month
+    const nextMonthDate = new Date(y, m, 1); // y,m => next month
     const ny = nextMonthDate.getFullYear();
     const nm = nextMonthDate.getMonth() + 1;
     const endExclusive = firstDayOfMonthISO(ny, nm);
     return { start, endExclusive };
   }
 
-  // last month
-  const lastMonthDate = new Date(y, m - 2, 1); // m-2 because JS month 0-based
+  const lastMonthDate = new Date(y, m - 2, 1);
   const ly = lastMonthDate.getFullYear();
   const lm = lastMonthDate.getMonth() + 1;
 
   const start = firstDayOfMonthISO(ly, lm);
-  const endExclusive = firstDayOfMonthISO(y, m); // first day of this month
+  const endExclusive = firstDayOfMonthISO(y, m);
   return { start, endExclusive };
 }
 
@@ -120,7 +119,6 @@ function SwipeRow(props: {
   rowId: string;
   openRowId: string | null;
   setOpenRowId: (id: string | null) => void;
-
   children: React.ReactNode;
   onEdit: () => void;
   onDelete: () => Promise<void>;
@@ -304,7 +302,6 @@ export default function ExpensesListPage() {
       const b = monthBoundsISO("last");
       return { mode: "between" as const, start: b.start, endExclusive: b.endExclusive };
     }
-    // last N days: >= fromDate
     const from = isoDaysAgo(Number(range));
     return { mode: "gte" as const, start: from, endExclusive: null as string | null };
   }, [range]);
@@ -408,7 +405,7 @@ export default function ExpensesListPage() {
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Expenses</h1>
 
-        <a
+        <Link
           href="/expenses/new"
           style={{
             marginLeft: "auto",
@@ -422,7 +419,7 @@ export default function ExpensesListPage() {
           onTouchStart={(e) => e.stopPropagation()}
         >
           + Add Expense
-        </a>
+        </Link>
       </div>
 
       <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -455,7 +452,7 @@ export default function ExpensesListPage() {
         <div style={{ marginTop: 14, background: "#ffe6e6", padding: 12, borderRadius: 10 }}>{error}</div>
       ) : expenses.length === 0 ? (
         <div style={{ marginTop: 14, opacity: 0.8 }}>
-          No expenses found in this range. <a href="/expenses/new">Add your first one</a>.
+          No expenses found in this range. <Link href="/expenses/new">Add your first one</Link>.
         </div>
       ) : (
         <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
