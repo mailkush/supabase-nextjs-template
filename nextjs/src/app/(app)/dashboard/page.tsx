@@ -416,39 +416,7 @@ export default function DashboardPage() {
 
   return (
     <main style={{ maxWidth: 820, margin: "0 auto", padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>Dashboard</h1>
-
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link
-            href="/expenses"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #ddd",
-              fontWeight: 800,
-              textDecoration: "none",
-            }}
-          >
-            View expenses
-          </Link>
-
-          <Link
-            href="/expenses/new"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #ddd",
-              fontWeight: 800,
-              textDecoration: "none",
-            }}
-          >
-            + Add
-          </Link>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+     <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ opacity: 0.8 }}>Range</span>
           <select
