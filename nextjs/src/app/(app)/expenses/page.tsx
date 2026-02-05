@@ -399,44 +399,8 @@ export default function ExpensesListPage() {
   };
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: 16 }} onClick={closeOpenRow} onTouchStart={closeOpenRow}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Expenses</h1>
-
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link
-            href="/dashboard"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #ddd",
-              fontWeight: 700,
-              textDecoration: "none",
-            }}
-            onClick={(e) => e.stopPropagation()}
-            onTouchStart={(e) => e.stopPropagation()}
-          >
-            Dashboard
-          </Link>
-
-          <Link
-            href="/expenses/new"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #ddd",
-              fontWeight: 700,
-              textDecoration: "none",
-            }}
-            onClick={(e) => e.stopPropagation()}
-            onTouchStart={(e) => e.stopPropagation()}
-          >
-            + Add
-          </Link>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+    <main onClick={closeOpenRow} onTouchStart={closeOpenRow}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span>Range</span>
           <select
