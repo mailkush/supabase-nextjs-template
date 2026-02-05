@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
+import { createSPAClient } from "@/lib/supabase/client";
 
 type Category = { id: string; name: string };
 type Account = { id: string; name: string; type: string };
@@ -15,6 +15,7 @@ function todayISODate() {
 }
 
 export default function NewExpensePage() {
+  const supabase = createSPAClient();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
