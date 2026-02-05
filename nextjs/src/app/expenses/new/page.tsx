@@ -15,7 +15,7 @@ function todayISODate() {
 }
 
 export default function NewExpensePage() {
-  // ✅ create once so it doesn't change on every render
+  // Create once so it stays stable across renders
   const [supabase] = useState(() => createSPAClient());
 
   const [loading, setLoading] = useState(true);
@@ -38,7 +38,6 @@ export default function NewExpensePage() {
       setLoading(true);
       setError(null);
 
-      // Check logged-in user
       const { data: authData, error: authErr } = await supabase.auth.getUser();
       if (authErr || !authData?.user) {
         setError("You are not logged in. Please go to /auth/login and sign in.");
@@ -46,8 +45,11 @@ export default function NewExpensePage() {
         return;
       }
 
-      // Load categories (shared)
-      const { data: catData, error: catErr } = await supabase
+      // IMPORTANT: your project's Database types don't yet include these tables,
+      // so we use `as any` to avoid TypeScript treating them as `never`.
+      const sb: any = supabase;
+
+      const { data: catData, error: catErr } = await sb
         .from("categories")
         .select("id,name")
         .order("name", { ascending: true });
@@ -58,8 +60,7 @@ export default function NewExpensePage() {
         return;
       }
 
-      // Load accounts (RLS: only your accounts)
-      const { data: accData, error: accErr } = await supabase
+      const { data: accData, error: accErr } = await sb
         .from("accounts")
         .select("id,name,type")
         .order("name", { ascending: true });
@@ -70,9 +71,8 @@ export default function NewExpensePage() {
         return;
       }
 
-      // ✅ Fix TypeScript "never" issue by explicitly typing the arrays
-      const cats = (catData ?? []) as unknown as Category[];
-      const accs = (accData ?? []) as unknown as Account[];
+      const cats = (catData ?? []) as Category[];
+      const accs = (accData ?? []) as Account[];
 
       setCategories(cats);
       setAccounts(accs);
@@ -115,7 +115,9 @@ export default function NewExpensePage() {
       return;
     }
 
-    const { error: insErr } = await supabase.from("expenses").insert({
+    const sb: any = supabase;
+
+    const { error: insErr } = await sb.from("expenses").insert({
       user_id: user.id,
       account_id: accountId,
       category_id: categoryId || null,
