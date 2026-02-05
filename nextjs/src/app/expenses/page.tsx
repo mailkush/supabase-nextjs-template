@@ -431,7 +431,7 @@ export default function ExpensesListPage() {
             onClick={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
           >
-            + Add Expense
+            + Add
           </Link>
         </div>
       </div>
