@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { createSPAClient } from "@/lib/supabase/client";
 
 type Category = { id: string; name: string };
@@ -54,6 +55,7 @@ type LooseSupabaseUpdate = {
 
 export default function EditExpensePage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const id = params?.id ?? "";
 
   const [supabaseRaw] = useState(() => createSPAClient());
@@ -89,12 +91,10 @@ export default function EditExpensePage() {
 
       const { data: authData, error: authErr } = await supabase.auth.getUser();
       if (authErr || !authData?.user) {
-        setError("You are not logged in. Please go to /auth/login and sign in.");
-        setLoading(false);
+        router.push("/auth/login");
         return;
       }
 
-      // Load categories
       const catQ = supabase.from("categories").select("id,name") as SimpleQuery;
       const catRes = await catQ.order("name", { ascending: true });
       if (catRes.error) {
@@ -104,7 +104,6 @@ export default function EditExpensePage() {
       }
       setCategories((catRes.data ?? []) as unknown as Category[]);
 
-      // Load accounts
       const accQ = supabase.from("accounts").select("id,name,type") as SimpleQuery;
       const accRes = await accQ.order("name", { ascending: true });
       if (accRes.error) {
@@ -114,13 +113,11 @@ export default function EditExpensePage() {
       }
       setAccounts((accRes.data ?? []) as unknown as Account[]);
 
-      // Load the expense (RLS should ensure only your row is visible)
       const expQ = supabase
         .from("expenses")
         .select("id,amount,description,expense_date,category_id,account_id") as ExpenseGetQuery;
 
       const expRes = await expQ.eq("id", id).single();
-
       if (expRes.error || !expRes.data) {
         setError(`Could not load expense: ${expRes.error?.message || "Not found"}`);
         setLoading(false);
@@ -139,7 +136,7 @@ export default function EditExpensePage() {
     };
 
     load();
-  }, [id, supabase]);
+  }, [id, router, supabase]);
 
   const onSave = async (evt: React.FormEvent) => {
     evt.preventDefault();
@@ -192,7 +189,7 @@ export default function EditExpensePage() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Edit Expense</h1>
 
-        <a
+        <Link
           href="/expenses"
           style={{
             marginLeft: "auto",
@@ -204,7 +201,7 @@ export default function EditExpensePage() {
           }}
         >
           Back
-        </a>
+        </Link>
       </div>
 
       {loading ? (
