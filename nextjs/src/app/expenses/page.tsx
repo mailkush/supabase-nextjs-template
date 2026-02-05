@@ -83,7 +83,7 @@ function monthBoundsISO(which: "this" | "last") {
 
   if (which === "this") {
     const start = firstDayOfMonthISO(y, m);
-    const nextMonthDate = new Date(y, m, 1); // y,m => next month
+    const nextMonthDate = new Date(y, m, 1);
     const ny = nextMonthDate.getFullYear();
     const nm = nextMonthDate.getMonth() + 1;
     const endExclusive = firstDayOfMonthISO(ny, nm);
@@ -119,6 +119,7 @@ function SwipeRow(props: {
   rowId: string;
   openRowId: string | null;
   setOpenRowId: (id: string | null) => void;
+
   children: React.ReactNode;
   onEdit: () => void;
   onDelete: () => Promise<void>;
@@ -376,10 +377,7 @@ export default function ExpensesListPage() {
     load();
   }, [computedBounds, supabase]);
 
-  const total = useMemo(
-    () => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
-    [expenses]
-  );
+  const total = useMemo(() => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0), [expenses]);
 
   const deleteExpense = async (id: string) => {
     const prev = expenses;
@@ -405,21 +403,37 @@ export default function ExpensesListPage() {
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Expenses</h1>
 
-        <Link
-          href="/expenses/new"
-          style={{
-            marginLeft: "auto",
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid #ddd",
-            fontWeight: 700,
-            textDecoration: "none",
-          }}
-          onClick={(e) => e.stopPropagation()}
-          onTouchStart={(e) => e.stopPropagation()}
-        >
-          + Add Expense
-        </Link>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link
+            href="/dashboard"
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              fontWeight: 700,
+              textDecoration: "none",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+          >
+            Dashboard
+          </Link>
+
+          <Link
+            href="/expenses/new"
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              fontWeight: 700,
+              textDecoration: "none",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+          >
+            + Add Expense
+          </Link>
+        </div>
       </div>
 
       <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
