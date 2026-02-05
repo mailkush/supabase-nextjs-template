@@ -1,163 +1,164 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { createSPASassClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
-import { CheckCircle, Key } from 'lucide-react';
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { createSPAClient } from "@/lib/supabase/client";
 
 export default function ResetPasswordPage() {
-    const [newPassword, setNewPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [success, setSuccess] = useState(false);
-    const router = useRouter();
+  const router = useRouter();
+  const supabase = useMemo(() => createSPAClient(), []);
 
-    // Check if we have a valid recovery session
-    useEffect(() => {
-        const checkSession = async () => {
-            try {
-                const supabase = await createSPASassClient();
-                const { data: { user }, error } = await supabase.getSupabaseClient().auth.getUser();
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
-                if (error || !user) {
-                    setError('Invalid or expired reset link. Please request a new password reset.');
-                }
-            } catch {
-                setError('Failed to verify reset session');
-            }
-        };
+  const [checking, setChecking] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-        checkSession();
-    }, []);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError('');
+  // Verify the recovery session exists (otherwise link is invalid/expired)
+  useEffect(() => {
+    const run = async () => {
+      setChecking(true);
+      setError(null);
 
-        if (newPassword !== confirmPassword) {
-            setError("Passwords don't match");
-            return;
-        }
+      const { data, error: sessionErr } = await supabase.auth.getSession();
 
-        if (newPassword.length < 6) {
-            setError('Password must be at least 6 characters long');
-            return;
-        }
+      if (sessionErr) {
+        setError(sessionErr.message);
+        setChecking(false);
+        return;
+      }
 
-        setLoading(true);
+      if (!data?.session) {
+        setError("Invalid or expired reset link. Please request a new reset email.");
+        setChecking(false);
+        return;
+      }
 
-        try {
-            const supabase = await createSPASassClient();
-            const { error } = await supabase.getSupabaseClient().auth.updateUser({
-                password: newPassword
-            });
-
-            if (error) throw error;
-
-            setSuccess(true);
-            setTimeout(() => {
-                router.push('/app');
-            }, 3000);
-        } catch (err) {
-            if (err instanceof Error) {
-                setError(err.message);
-            } else {
-                setError('Failed to reset password');
-            }
-        } finally {
-            setLoading(false);
-        }
+      setChecking(false);
     };
 
-    if (success) {
-        return (
-            <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-                <div className="text-center">
-                    <div className="flex justify-center mb-4">
-                        <CheckCircle className="h-16 w-16 text-green-500" />
-                    </div>
+    run();
+  }, [supabase]);
 
-                    <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                        Password reset successful
-                    </h2>
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setOk(null);
 
-                    <p className="text-gray-600 mb-8">
-                        Your password has been successfully reset.
-                        You will be redirected to the app in a moment.
-                    </p>
-                </div>
-            </div>
-        );
+    if (newPassword.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
     }
 
-    return (
-        <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-            <div className="sm:mx-auto sm:w-full sm:max-w-md">
-                <div className="flex justify-center mb-4">
-                    <Key className="h-12 w-12 text-primary-600" />
-                </div>
-                <h2 className="text-2xl font-bold text-center text-gray-900 mb-8">
-                    Create new password
-                </h2>
-            </div>
+    if (newPassword !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
 
-            {error && (
-                <div className="mb-4 p-4 text-sm text-red-700 bg-red-100 rounded-lg">
-                    {error}
-                </div>
-            )}
+    setSaving(true);
 
-            <form onSubmit={handleSubmit} className="space-y-6">
-                <div>
-                    <label htmlFor="new-password" className="block text-sm font-medium text-gray-700">
-                        New Password
-                    </label>
-                    <div className="mt-1">
-                        <input
-                            id="new-password"
-                            name="new-password"
-                            type="password"
-                            autoComplete="new-password"
-                            required
-                            value={newPassword}
-                            onChange={(e) => setNewPassword(e.target.value)}
-                            className="block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-primary-500"
-                        />
-                    </div>
-                </div>
+    const { error: updErr } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
 
-                <div>
-                    <label htmlFor="confirm-password" className="block text-sm font-medium text-gray-700">
-                        Confirm New Password
-                    </label>
-                    <div className="mt-1">
-                        <input
-                            id="confirm-password"
-                            name="confirm-password"
-                            type="password"
-                            autoComplete="new-password"
-                            required
-                            value={confirmPassword}
-                            onChange={(e) => setConfirmPassword(e.target.value)}
-                            className="block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-primary-500"
-                        />
-                    </div>
-                    <p className="mt-2 text-sm text-gray-500">
-                        Password must be at least 6 characters long
-                    </p>
-                </div>
+    if (updErr) {
+      setError(updErr.message);
+      setSaving(false);
+      return;
+    }
 
-                <div>
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="flex w-full justify-center rounded-md border border-transparent bg-primary-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50"
-                    >
-                        {loading ? 'Resetting password...' : 'Reset password'}
-                    </button>
-                </div>
-            </form>
+    setOk("Password updated ✅ Redirecting…");
+    setSaving(false);
+
+    // Small pause so user sees the confirmation
+    setTimeout(() => {
+      router.replace("/dashboard");
+    }, 800);
+  };
+
+  return (
+    <main style={{ maxWidth: 420, margin: "0 auto", padding: 16 }}>
+      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Reset password</h1>
+      <p style={{ marginTop: 0, marginBottom: 16, opacity: 0.75 }}>
+        Choose a new password for your account.
+      </p>
+
+      {checking ? (
+        <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 12, opacity: 0.8 }}>
+          Checking reset link…
         </div>
-    );
+      ) : (
+        <>
+          {error && (
+            <div style={{ background: "#ffe6e6", padding: 12, borderRadius: 12, marginBottom: 12 }}>
+              {error}
+              <div style={{ marginTop: 10 }}>
+                <Link href="/auth/login" style={{ fontWeight: 800, textDecoration: "none" }}>
+                  Back to login
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {ok && (
+            <div style={{ background: "#e8ffe8", padding: 12, borderRadius: 12, marginBottom: 12 }}>
+              {ok}
+            </div>
+          )}
+
+          {!error ? (
+            <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span>New password</span>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="At least 6 characters"
+                  style={{ padding: 10, borderRadius: 12, border: "1px solid #ccc" }}
+                />
+              </label>
+
+              <label style={{ display: "grid", gap: 6 }}>
+                <span>Confirm new password</span>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  style={{ padding: 10, borderRadius: 12, border: "1px solid #ccc" }}
+                />
+              </label>
+
+              <button
+                type="submit"
+                disabled={saving}
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "none",
+                  fontWeight: 900,
+                  cursor: saving ? "not-allowed" : "pointer",
+                }}
+              >
+                {saving ? "Updating…" : "Update password"}
+              </button>
+
+              <div style={{ fontSize: 13, opacity: 0.75 }}>
+                Remembered your password?{" "}
+                <Link href="/auth/login" style={{ fontWeight: 800, textDecoration: "none" }}>
+                  Sign in
+                </Link>
+              </div>
+            </form>
+          ) : null}
+        </>
+      )}
+    </main>
+  );
 }
