@@ -1,30 +1,29 @@
 "use client";
 
 import { useEffect, useState } from "react";
-// ✅ Adjust this import path if your project uses a different file location.
-import { createClient } from "@/lib/supabase/client";
+import { supabase } from "@/lib/supabase/client";
 
 type Category = { id: string; name: string };
 type Account = { id: string; name: string; type: string };
 
 function todayISODate() {
   const d = new Date();
-  // local date to YYYY-MM-DD
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
+export default function NewExpensePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
 
-  // Form state
   const [amount, setAmount] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [categoryId, setCategoryId] = useState<string>("");
@@ -32,11 +31,11 @@ function todayISODate() {
   const [expenseDate, setExpenseDate] = useState<string>(todayISODate());
 
   useEffect(() => {
-    async function load() {
+    const load = async () => {
       setLoading(true);
       setError(null);
 
-      // 1) Get logged-in user
+      // Check logged-in user (cookie session)
       const { data: authData, error: authErr } = await supabase.auth.getUser();
       if (authErr || !authData?.user) {
         setError("You are not logged in. Please sign in first.");
@@ -44,7 +43,7 @@ function todayISODate() {
         return;
       }
 
-      // 2) Load categories (shared)
+      // Load categories (shared)
       const { data: catData, error: catErr } = await supabase
         .from("categories")
         .select("id,name")
@@ -56,7 +55,7 @@ function todayISODate() {
         return;
       }
 
-      // 3) Load accounts (RLS limits to your own)
+      // Load accounts (RLS: only your accounts)
       const { data: accData, error: accErr } = await supabase
         .from("accounts")
         .select("id,name,type")
@@ -71,22 +70,20 @@ function todayISODate() {
       setCategories((catData || []) as Category[]);
       setAccounts((accData || []) as Account[]);
 
-      // Set defaults (first option)
       if (catData?.length) setCategoryId(catData[0].id);
       if (accData?.length) setAccountId(accData[0].id);
 
       setLoading(false);
-    }
+    };
 
     load();
-  }, [supabase]);
+  }, []);
 
-  async function onSave(e: React.FormEvent) {
+  const onSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setOk(null);
     setError(null);
 
-    // Basic validation
     const amt = Number(amount);
     if (!amount || Number.isNaN(amt) || amt <= 0) {
       setError("Please enter a valid amount (> 0).");
@@ -131,7 +128,7 @@ function todayISODate() {
     setDescription("");
     setExpenseDate(todayISODate());
     setSaving(false);
-  }
+  };
 
   return (
     <main style={{ maxWidth: 520, margin: "0 auto", padding: 16 }}>
@@ -177,7 +174,11 @@ function todayISODate() {
                 placeholder="e.g., 250"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ccc",
+                }}
               />
             </label>
 
@@ -187,7 +188,11 @@ function todayISODate() {
                 placeholder="e.g., Lunch at office"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ccc",
+                }}
               />
             </label>
 
@@ -196,7 +201,11 @@ function todayISODate() {
               <select
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ccc",
+                }}
               >
                 {categories.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -212,7 +221,11 @@ function todayISODate() {
                 type="date"
                 value={expenseDate}
                 onChange={(e) => setExpenseDate(e.target.value)}
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ccc",
+                }}
               />
             </label>
 
@@ -221,7 +234,11 @@ function todayISODate() {
               <select
                 value={accountId}
                 onChange={(e) => setAccountId(e.target.value)}
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ccc",
+                }}
               >
                 {accounts.map((a) => (
                   <option key={a.id} value={a.id}>
@@ -238,17 +255,13 @@ function todayISODate() {
                 padding: 12,
                 borderRadius: 12,
                 border: "none",
-                cursor: saving ? "not-allowed" : "pointer",
                 fontWeight: 700,
+                cursor: saving ? "not-allowed" : "pointer",
               }}
             >
               {saving ? "Saving…" : "Save Expense"}
             </button>
           </form>
-
-          <div style={{ marginTop: 14, fontSize: 14, opacity: 0.8 }}>
-            Tip: Bookmark this page on iPhone via “Add to Home Screen”.
-          </div>
         </>
       )}
     </main>
