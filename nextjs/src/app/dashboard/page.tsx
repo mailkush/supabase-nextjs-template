@@ -373,7 +373,7 @@ export default function DashboardPage() {
       sumByDate[d] = (sumByDate[d] || 0) + (Number(e.amount) || 0);
     }
 
-    let start = computedBounds.start;
+    const start = computedBounds.start;
     let endInclusive: string;
 
     if (computedBounds.mode === "eq") {
