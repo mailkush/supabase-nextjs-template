@@ -100,17 +100,33 @@ function formatINR(n: number) {
   }
 }
 
-function daysBetweenInclusive(startISO: string, endISO: string) {
-  // expects YYYY-MM-DD; returns inclusive count
-  const s = new Date(`${startISO}T00:00:00`);
-  const e = new Date(`${endISO}T00:00:00`);
-  const ms = e.getTime() - s.getTime();
-  const days = Math.floor(ms / (24 * 60 * 60 * 1000)) + 1;
-  return Math.max(1, days);
-}
-
 function sumAmounts(rows: ExpenseRow[]) {
   return rows.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
+}
+
+function addDaysISO(iso: string, add: number) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + add);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function compareISO(a: string, b: string) {
+  // lex compare works for YYYY-MM-DD
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+function endInclusiveFromEndExclusive(endExclusive: string) {
+  const d = new Date(`${endExclusive}T00:00:00`);
+  d.setDate(d.getDate() - 1);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function topBuckets(
@@ -182,6 +198,28 @@ function Card(props: { title: string; value: string; subtitle?: string }) {
   );
 }
 
+function TrendRow(props: { date: string; value: number; max: number }) {
+  const pct = props.max > 0 ? Math.round((props.value / props.max) * 100) : 0;
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontWeight: 650 }}>{props.date}</div>
+        <div style={{ opacity: 0.85 }}>{formatINR(props.value)}</div>
+      </div>
+      <div style={{ height: 8, background: "#f1f1f1", borderRadius: 999 }}>
+        <div
+          style={{
+            height: 8,
+            width: `${Math.min(100, Math.max(0, pct))}%`,
+            background: "#111",
+            borderRadius: 999,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
 
@@ -225,7 +263,6 @@ export default function DashboardPage() {
         return;
       }
 
-      // categories
       const catQ = supabase.from("categories").select("id,name") as SimpleQuery;
       const catRes = await catQ.order("name", { ascending: true });
       if (catRes.error) {
@@ -233,13 +270,11 @@ export default function DashboardPage() {
         setLoading(false);
         return;
       }
-
       const cats = (catRes.data ?? []) as unknown as CategoriesRow[];
       const cm: Record<string, string> = {};
       for (const c of cats) cm[c.id] = c.name;
       setCatMap(cm);
 
-      // accounts
       const accQ = supabase.from("accounts").select("id,name,type") as SimpleQuery;
       const accRes = await accQ.order("name", { ascending: true });
       if (accRes.error) {
@@ -247,13 +282,11 @@ export default function DashboardPage() {
         setLoading(false);
         return;
       }
-
       const accs = (accRes.data ?? []) as unknown as AccountsRow[];
       const am: Record<string, string> = {};
       for (const a of accs) am[a.id] = `${a.name} (${a.type})`;
       setAccMap(am);
 
-      // expenses in range
       const expQ = supabase
         .from("expenses")
         .select("id,amount,expense_date,category_id,account_id") as ExpenseQuery;
@@ -291,17 +324,14 @@ export default function DashboardPage() {
     if (range === "today") return 1;
 
     if (computedBounds.mode === "between" && computedBounds.endExclusive) {
-      // endExclusive is first of next month; inclusive end is day before endExclusive
-      const endDate = new Date(`${computedBounds.endExclusive}T00:00:00`);
-      endDate.setDate(endDate.getDate() - 1);
-      const yyyy = endDate.getFullYear();
-      const mm = String(endDate.getMonth() + 1).padStart(2, "0");
-      const dd = String(endDate.getDate()).padStart(2, "0");
-      const endISO = `${yyyy}-${mm}-${dd}`;
-      return daysBetweenInclusive(computedBounds.start, endISO);
+      const endISO = endInclusiveFromEndExclusive(computedBounds.endExclusive);
+      // inclusive days between start & end
+      const s = new Date(`${computedBounds.start}T00:00:00`).getTime();
+      const e = new Date(`${endISO}T00:00:00`).getTime();
+      const days = Math.floor((e - s) / (24 * 60 * 60 * 1000)) + 1;
+      return Math.max(1, days);
     }
 
-    // last N days
     const n = Number(range);
     return Number.isFinite(n) && n > 0 ? n : 1;
   }, [computedBounds, range]);
@@ -313,10 +343,7 @@ export default function DashboardPage() {
     return topBuckets(
       expenses,
       (r) => (r.category_id ? r.category_id : uncKey),
-      (key) => {
-        if (key === uncKey) return "Uncategorised";
-        return catMap[key] || "Unknown category";
-      },
+      (key) => (key === uncKey ? "Uncategorised" : catMap[key] || "Unknown category"),
       8
     );
   }, [expenses, catMap]);
@@ -330,15 +357,50 @@ export default function DashboardPage() {
     );
   }, [expenses, accMap]);
 
-  const maxCat = useMemo(() => {
-    const maxTop = byCategory.top.reduce((m, x) => Math.max(m, x.total), 0);
-    return Math.max(maxTop, byCategory.othersTotal);
-  }, [byCategory]);
+  const maxCat = useMemo(() => Math.max(byCategory.top.reduce((m, x) => Math.max(m, x.total), 0), byCategory.othersTotal), [
+    byCategory,
+  ]);
 
-  const maxAcc = useMemo(() => {
-    const maxTop = byAccount.top.reduce((m, x) => Math.max(m, x.total), 0);
-    return Math.max(maxTop, byAccount.othersTotal);
-  }, [byAccount]);
+  const maxAcc = useMemo(() => Math.max(byAccount.top.reduce((m, x) => Math.max(m, x.total), 0), byAccount.othersTotal), [
+    byAccount,
+  ]);
+
+  // ---- Daily trend (fills missing days with 0) ----
+  const trend = useMemo(() => {
+    const sumByDate: Record<string, number> = {};
+    for (const e of expenses) {
+      const d = e.expense_date;
+      sumByDate[d] = (sumByDate[d] || 0) + (Number(e.amount) || 0);
+    }
+
+    let start = computedBounds.start;
+    let endInclusive: string;
+
+    if (computedBounds.mode === "eq") {
+      endInclusive = start;
+    } else if (computedBounds.mode === "between" && computedBounds.endExclusive) {
+      endInclusive = endInclusiveFromEndExclusive(computedBounds.endExclusive);
+    } else {
+      // gte mode for last N days: include from->today
+      endInclusive = todayISODate();
+    }
+
+    // build ordered list
+    const out: { date: string; total: number }[] = [];
+    let cur = start;
+
+    // safety cap to avoid infinite loops
+    let guard = 0;
+    while (compareISO(cur, endInclusive) <= 0 && guard < 370) {
+      out.push({ date: cur, total: sumByDate[cur] || 0 });
+      cur = addDaysISO(cur, 1);
+      guard += 1;
+    }
+
+    return out;
+  }, [expenses, computedBounds]);
+
+  const maxTrend = useMemo(() => trend.reduce((m, x) => Math.max(m, x.total), 0), [trend]);
 
   return (
     <main style={{ maxWidth: 820, margin: "0 auto", padding: 16 }}>
@@ -402,10 +464,42 @@ export default function DashboardPage() {
         <div style={{ marginTop: 14, background: "#ffe6e6", padding: 12, borderRadius: 10 }}>{error}</div>
       ) : (
         <>
-          <div style={{ marginTop: 14, display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+          <div
+            style={{
+              marginTop: 14,
+              display: "grid",
+              gap: 10,
+              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+            }}
+          >
             <Card title="Total spend" value={formatINR(totalSpend)} subtitle={`${txCount} transactions`} />
             <Card title="Avg per day" value={formatINR(avgPerDay)} subtitle={`${daysInRange} day(s) in range`} />
             <Card title="Transactions" value={`${txCount}`} subtitle="Count in selected range" />
+          </div>
+
+          {/* Daily Trend */}
+          <div style={{ marginTop: 14, border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>Daily trend</h2>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Spend per day</div>
+            </div>
+
+            {trend.length === 0 ? (
+              <div style={{ marginTop: 10, opacity: 0.7 }}>No data.</div>
+            ) : (
+              <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                {/* For long ranges, show only last 31 days to keep it readable */}
+                {(trend.length > 31 ? trend.slice(-31) : trend).map((t) => (
+                  <TrendRow key={t.date} date={t.date} value={t.total} max={maxTrend} />
+                ))}
+
+                {trend.length > 31 ? (
+                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.65 }}>
+                    Showing last 31 days of the selected range.
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
 
           <div style={{ marginTop: 14, display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
@@ -422,9 +516,7 @@ export default function DashboardPage() {
                   {byCategory.top.map((x) => (
                     <BarRow key={x.key} label={x.label} value={x.total} max={maxCat} />
                   ))}
-                  {byCategory.othersTotal > 0 ? (
-                    <BarRow label="Others" value={byCategory.othersTotal} max={maxCat} />
-                  ) : null}
+                  {byCategory.othersTotal > 0 ? <BarRow label="Others" value={byCategory.othersTotal} max={maxCat} /> : null}
                 </div>
               )}
             </div>
@@ -442,16 +534,10 @@ export default function DashboardPage() {
                   {byAccount.top.map((x) => (
                     <BarRow key={x.key} label={x.label} value={x.total} max={maxAcc} />
                   ))}
-                  {byAccount.othersTotal > 0 ? (
-                    <BarRow label="Others" value={byAccount.othersTotal} max={maxAcc} />
-                  ) : null}
+                  {byAccount.othersTotal > 0 ? <BarRow label="Others" value={byAccount.othersTotal} max={maxAcc} /> : null}
                 </div>
               )}
             </div>
-          </div>
-
-          <div style={{ marginTop: 14, fontSize: 12, opacity: 0.65 }}>
-            Next enhancement (optional): budgets + “remaining this month”. That will require adding a small <b>budgets</b> table.
           </div>
         </>
       )}
