@@ -88,6 +88,30 @@ function monthBoundsISO(which: "this" | "last") {
   return { start, endExclusive };
 }
 
+function endInclusiveFromEndExclusive(endExclusive: string) {
+  const d = new Date(`${endExclusive}T00:00:00`);
+  d.setDate(d.getDate() - 1);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function addDaysISO(iso: string, add: number) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + add);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function compareISO(a: string, b: string) {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 function formatINR(n: number) {
   try {
     return new Intl.NumberFormat("en-IN", {
@@ -102,31 +126,6 @@ function formatINR(n: number) {
 
 function sumAmounts(rows: ExpenseRow[]) {
   return rows.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
-}
-
-function addDaysISO(iso: string, add: number) {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() + add);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function compareISO(a: string, b: string) {
-  // lex compare works for YYYY-MM-DD
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-
-function endInclusiveFromEndExclusive(endExclusive: string) {
-  const d = new Date(`${endExclusive}T00:00:00`);
-  d.setDate(d.getDate() - 1);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 function topBuckets(
@@ -156,6 +155,25 @@ function topBuckets(
   };
 }
 
+function Card(props: { title: string; value: string; subtitle?: string }) {
+  return (
+    <div
+      style={{
+        border: "1px solid #e7e7e7",
+        borderRadius: 16,
+        padding: 12,
+        background: "white",
+      }}
+    >
+      <div style={{ fontSize: 13, opacity: 0.7, fontWeight: 700 }}>{props.title}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{props.value}</div>
+      {props.subtitle ? (
+        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{props.subtitle}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function BarRow(props: { label: string; value: number; max: number }) {
   const pct = props.max > 0 ? Math.round((props.value / props.max) * 100) : 0;
 
@@ -179,31 +197,20 @@ function BarRow(props: { label: string; value: number; max: number }) {
   );
 }
 
-function Card(props: { title: string; value: string; subtitle?: string }) {
-  return (
-    <div
-      style={{
-        border: "1px solid #e7e7e7",
-        borderRadius: 16,
-        padding: 12,
-        background: "white",
-      }}
-    >
-      <div style={{ fontSize: 13, opacity: 0.7, fontWeight: 700 }}>{props.title}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{props.value}</div>
-      {props.subtitle ? (
-        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{props.subtitle}</div>
-      ) : null}
-    </div>
-  );
+function formatDayLabel(iso: string) {
+  const d = new Date(`${iso}T00:00:00`);
+  const dow = d.toLocaleDateString("en-US", { weekday: "short" }); // Mon
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mmm = d.toLocaleDateString("en-US", { month: "short" }); // Jan
+  return `${dow} ${dd}-${mmm}`;
 }
 
-function TrendRow(props: { date: string; value: number; max: number }) {
+function TrendRow(props: { dateISO: string; value: number; max: number }) {
   const pct = props.max > 0 ? Math.round((props.value / props.max) * 100) : 0;
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ fontWeight: 650 }}>{props.date}</div>
+        <div style={{ fontWeight: 650 }}>{formatDayLabel(props.dateISO)}</div>
         <div style={{ opacity: 0.85 }}>{formatINR(props.value)}</div>
       </div>
       <div style={{ height: 8, background: "#f1f1f1", borderRadius: 999 }}>
@@ -227,6 +234,7 @@ export default function DashboardPage() {
   const supabase = supabaseRaw as unknown as LooseSupabase;
 
   const [range, setRange] = useState<RangeOption>("this_month");
+  const [trendOpen, setTrendOpen] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -325,7 +333,6 @@ export default function DashboardPage() {
 
     if (computedBounds.mode === "between" && computedBounds.endExclusive) {
       const endISO = endInclusiveFromEndExclusive(computedBounds.endExclusive);
-      // inclusive days between start & end
       const s = new Date(`${computedBounds.start}T00:00:00`).getTime();
       const e = new Date(`${endISO}T00:00:00`).getTime();
       const days = Math.floor((e - s) / (24 * 60 * 60 * 1000)) + 1;
@@ -357,15 +364,17 @@ export default function DashboardPage() {
     );
   }, [expenses, accMap]);
 
-  const maxCat = useMemo(() => Math.max(byCategory.top.reduce((m, x) => Math.max(m, x.total), 0), byCategory.othersTotal), [
-    byCategory,
-  ]);
+  const maxCat = useMemo(
+    () => Math.max(byCategory.top.reduce((m, x) => Math.max(m, x.total), 0), byCategory.othersTotal),
+    [byCategory]
+  );
 
-  const maxAcc = useMemo(() => Math.max(byAccount.top.reduce((m, x) => Math.max(m, x.total), 0), byAccount.othersTotal), [
-    byAccount,
-  ]);
+  const maxAcc = useMemo(
+    () => Math.max(byAccount.top.reduce((m, x) => Math.max(m, x.total), 0), byAccount.othersTotal),
+    [byAccount]
+  );
 
-  // ---- Daily trend (fills missing days with 0) ----
+  // Daily trend (fills missing days with 0)
   const trend = useMemo(() => {
     const sumByDate: Record<string, number> = {};
     for (const e of expenses) {
@@ -381,15 +390,12 @@ export default function DashboardPage() {
     } else if (computedBounds.mode === "between" && computedBounds.endExclusive) {
       endInclusive = endInclusiveFromEndExclusive(computedBounds.endExclusive);
     } else {
-      // gte mode for last N days: include from->today
       endInclusive = todayISODate();
     }
 
-    // build ordered list
     const out: { date: string; total: number }[] = [];
     let cur = start;
 
-    // safety cap to avoid infinite loops
     let guard = 0;
     while (compareISO(cur, endInclusive) <= 0 && guard < 370) {
       out.push({ date: cur, total: sumByDate[cur] || 0 });
@@ -401,6 +407,12 @@ export default function DashboardPage() {
   }, [expenses, computedBounds]);
 
   const maxTrend = useMemo(() => trend.reduce((m, x) => Math.max(m, x.total), 0), [trend]);
+
+  const trendToShow = useMemo(() => {
+    return trend.length > 31 ? trend.slice(-31) : trend;
+  }, [trend]);
+
+  const trendTotalShown = useMemo(() => trendToShow.reduce((acc, t) => acc + t.total, 0), [trendToShow]);
 
   return (
     <main style={{ maxWidth: 820, margin: "0 auto", padding: 16 }}>
@@ -477,31 +489,6 @@ export default function DashboardPage() {
             <Card title="Transactions" value={`${txCount}`} subtitle="Count in selected range" />
           </div>
 
-          {/* Daily Trend */}
-          <div style={{ marginTop: 14, border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>Daily trend</h2>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>Spend per day</div>
-            </div>
-
-            {trend.length === 0 ? (
-              <div style={{ marginTop: 10, opacity: 0.7 }}>No data.</div>
-            ) : (
-              <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-                {/* For long ranges, show only last 31 days to keep it readable */}
-                {(trend.length > 31 ? trend.slice(-31) : trend).map((t) => (
-                  <TrendRow key={t.date} date={t.date} value={t.total} max={maxTrend} />
-                ))}
-
-                {trend.length > 31 ? (
-                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.65 }}>
-                    Showing last 31 days of the selected range.
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-
           <div style={{ marginTop: 14, display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
             <div style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -538,6 +525,50 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Daily Trend moved to bottom and collapsible */}
+          <div style={{ marginTop: 14, border: "1px solid #e7e7e7", borderRadius: 16, background: "white" }}>
+            <button
+              type="button"
+              onClick={() => setTrendOpen((v) => !v)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: 12,
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                borderRadius: 16,
+                fontWeight: 800,
+              }}
+            >
+              <span style={{ fontSize: 16 }}>Daily trend</span>
+              <span style={{ fontSize: 12, opacity: 0.75, fontWeight: 700 }}>
+                {trendOpen ? "Hide" : "Show"} • {formatINR(trendTotalShown)} • {trendToShow.length} days
+              </span>
+            </button>
+
+            {trendOpen ? (
+              <div style={{ padding: "0 12px 12px 12px" }}>
+                <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>
+                  Showing {trend.length > 31 ? "last 31 days of range" : "all days in range"} • 0-spend days included
+                </div>
+
+                {trendToShow.length === 0 ? (
+                  <div style={{ marginTop: 10, opacity: 0.7 }}>No data.</div>
+                ) : (
+                  <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                    {trendToShow.map((t) => (
+                      <TrendRow key={t.date} dateISO={t.date} value={t.total} max={maxTrend} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
         </>
       )}
