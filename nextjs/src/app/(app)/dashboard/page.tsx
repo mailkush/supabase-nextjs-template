@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createSPAClient } from "@/lib/supabase/client";
 
@@ -356,12 +355,7 @@ export default function DashboardPage() {
   }, [expenses, catMap]);
 
   const byAccount = useMemo(() => {
-    return topBuckets(
-      expenses,
-      (r) => r.account_id,
-      (key) => accMap[key] || "Unknown account",
-      8
-    );
+    return topBuckets(expenses, (r) => r.account_id, (key) => accMap[key] || "Unknown account", 8);
   }, [expenses, accMap]);
 
   const maxCat = useMemo(
@@ -408,47 +402,14 @@ export default function DashboardPage() {
 
   const maxTrend = useMemo(() => trend.reduce((m, x) => Math.max(m, x.total), 0), [trend]);
 
-  const trendToShow = useMemo(() => {
-    return trend.length > 31 ? trend.slice(-31) : trend;
-  }, [trend]);
+  const trendToShow = useMemo(() => (trend.length > 31 ? trend.slice(-31) : trend), [trend]);
 
   const trendTotalShown = useMemo(() => trendToShow.reduce((acc, t) => acc + t.total, 0), [trendToShow]);
 
   return (
-    <main style={{ maxWidth: 820, margin: "0 auto", padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>Dashboard</h1>
-
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link
-            href="/expenses"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #ddd",
-              fontWeight: 800,
-              textDecoration: "none",
-            }}
-          >
-            View expenses
-          </Link>
-
-          <Link
-            href="/expenses/new"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #ddd",
-              fontWeight: 800,
-              textDecoration: "none",
-            }}
-          >
-            + Add
-          </Link>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+    <main>
+      {/* Range selector */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ opacity: 0.8 }}>Range</span>
           <select
@@ -489,7 +450,14 @@ export default function DashboardPage() {
             <Card title="Transactions" value={`${txCount}`} subtitle="Count in selected range" />
           </div>
 
-          <div style={{ marginTop: 14, display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
+          <div
+            style={{
+              marginTop: 14,
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+            }}
+          >
             <div style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                 <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>By category</h2>
@@ -527,7 +495,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Daily Trend moved to bottom and collapsible */}
+          {/* Daily Trend (bottom + collapsible) */}
           <div style={{ marginTop: 14, border: "1px solid #e7e7e7", borderRadius: 16, background: "white" }}>
             <button
               type="button"
