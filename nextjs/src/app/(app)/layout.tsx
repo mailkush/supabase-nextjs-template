@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createSPAClient } from "@/lib/supabase/client";
 
 function NavLink({ href, label }: { href: string; label: string }) {
@@ -35,11 +35,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [email, setEmail] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     const run = async () => {
       setChecking(true);
-      const { data, error } = await supabase.auth.getUser();
 
+      const { data, error } = await supabase.auth.getUser();
       if (error || !data?.user) {
         router.replace("/auth/login");
         return;
@@ -52,9 +55,33 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     run();
   }, [router, supabase]);
 
+  // Close menu on outside click / tap / Escape
+  useEffect(() => {
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (!menuRef.current) return;
+      const target = e.target as Node | null;
+      if (target && !menuRef.current.contains(target)) setMenuOpen(false);
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown, { passive: true });
+    document.addEventListener("keydown", onKey);
+
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
   const logout = async () => {
     if (loggingOut) return;
     setLoggingOut(true);
+    setMenuOpen(false);
     await supabase.auth.signOut();
     router.replace("/auth/login");
   };
@@ -71,7 +98,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           opacity: 0.7,
         }}
       >
-        Loading…
+        Please wait Dhruvi, this takes time sometimes…
       </main>
     );
   }
@@ -106,24 +133,75 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <NavLink href="/expenses/new" label="+ Add" />
           </div>
 
-          <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>{email ?? ""}</div>
-
+          {/* Menu button (3 dots) */}
+          <div style={{ marginLeft: "auto", position: "relative" }} ref={menuRef}>
             <button
               type="button"
-              onClick={logout}
-              disabled={loggingOut}
+              aria-label="Menu"
+              onClick={() => setMenuOpen((v) => !v)}
               style={{
-                fontWeight: 900,
-                padding: "8px 10px",
+                width: 40,
+                height: 40,
                 borderRadius: 12,
                 border: "1px solid #ddd",
                 background: "white",
-                cursor: loggingOut ? "not-allowed" : "pointer",
+                cursor: "pointer",
+                fontWeight: 900,
+                display: "grid",
+                placeItems: "center",
               }}
             >
-              {loggingOut ? "…" : "Logout"}
+              ⋯
             </button>
+
+            {menuOpen ? (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: 46,
+                  width: 260,
+                  background: "white",
+                  border: "1px solid #eee",
+                  borderRadius: 14,
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.10)",
+                  padding: 12,
+                }}
+              >
+                <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>
+                  Signed in as
+                </div>
+                <div
+                  style={{
+                    fontWeight: 900,
+                    fontSize: 13,
+                    wordBreak: "break-word",
+                    marginBottom: 10,
+                  }}
+                >
+                  {email ?? ""}
+                </div>
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={logout}
+                    disabled={loggingOut}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: 12,
+                      border: "1px solid #ddd",
+                      background: "white",
+                      fontWeight: 900,
+                      cursor: loggingOut ? "not-allowed" : "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    {loggingOut ? "Logging out…" : "Logout"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </header>
