@@ -23,9 +23,10 @@ type SimpleQuery = {
 };
 
 type ExpenseQuery = {
-  gte: (column: string, value: string) => {
-    order: (column: string, opts: { ascending: boolean }) => Promise<QueryResult>;
-  };
+  gte: (column: string, value: string) => ExpenseQuery;
+  lt: (column: string, value: string) => ExpenseQuery;
+  eq: (column: string, value: string) => ExpenseQuery;
+  order: (column: string, opts: { ascending: boolean }) => Promise<QueryResult>;
 };
 
 type DeleteQuery = {
@@ -46,10 +47,19 @@ type LooseSupabase = {
   };
 };
 
-// Separate “delete” typing (so we don’t contaminate select typing)
 type LooseSupabaseWithDelete = {
   from: (table: string) => DeleteQuery;
 };
+
+type RangeOption = "today" | "this_month" | "last_month" | "7" | "30" | "90";
+
+function todayISODate() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 function isoDaysAgo(days: number) {
   const d = new Date();
@@ -58,6 +68,36 @@ function isoDaysAgo(days: number) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function firstDayOfMonthISO(year: number, month1to12: number) {
+  const mm = String(month1to12).padStart(2, "0");
+  return `${year}-${mm}-01`;
+}
+
+function monthBoundsISO(which: "this" | "last") {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth() + 1; // 1-12
+
+  if (which === "this") {
+    const start = firstDayOfMonthISO(y, m);
+    // next month
+    const nextMonthDate = new Date(y, m, 1); // JS month is 0-based; y,m => next month
+    const ny = nextMonthDate.getFullYear();
+    const nm = nextMonthDate.getMonth() + 1;
+    const endExclusive = firstDayOfMonthISO(ny, nm);
+    return { start, endExclusive };
+  }
+
+  // last month
+  const lastMonthDate = new Date(y, m - 2, 1); // m-2 because JS month 0-based
+  const ly = lastMonthDate.getFullYear();
+  const lm = lastMonthDate.getMonth() + 1;
+
+  const start = firstDayOfMonthISO(ly, lm);
+  const endExclusive = firstDayOfMonthISO(y, m); // first day of this month
+  return { start, endExclusive };
 }
 
 function formatINR(n: number) {
@@ -77,31 +117,48 @@ function clamp(n: number, min: number, max: number) {
 }
 
 function SwipeRow(props: {
+  rowId: string;
+  openRowId: string | null;
+  setOpenRowId: (id: string | null) => void;
+
   children: React.ReactNode;
+  onEdit: () => void;
   onDelete: () => Promise<void>;
 }) {
-  const ACTION_W = 96; // px width of Delete area
-  const THRESHOLD = 56; // px swipe threshold to keep open
+  const ACTION_W = 180;
+  const THRESHOLD = 80;
 
-  const [dx, setDx] = useState(0); // negative = swiped left
+  const isOpen = props.openRowId === props.rowId;
+
+  const [dx, setDx] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const startXRef = useRef<number | null>(null);
-  const lastDxRef = useRef<number>(0);
+  const startDxRef = useRef<number>(0);
   const draggingRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen) setDx(0);
+    if (isOpen) setDx(-ACTION_W);
+  }, [isOpen]);
 
   const onTouchStart = (e: React.TouchEvent) => {
     if (isDeleting) return;
+
+    if (props.openRowId && props.openRowId !== props.rowId) {
+      props.setOpenRowId(null);
+    }
+
     startXRef.current = e.touches[0].clientX;
-    lastDxRef.current = dx;
+    startDxRef.current = dx;
     draggingRef.current = true;
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
     if (!draggingRef.current || startXRef.current === null || isDeleting) return;
     const x = e.touches[0].clientX;
-    const delta = x - startXRef.current; // left swipe => negative
-    const next = clamp(lastDxRef.current + delta, -ACTION_W, 0);
+    const delta = x - startXRef.current;
+    const next = clamp(startDxRef.current + delta, -ACTION_W, 0);
     setDx(next);
   };
 
@@ -109,14 +166,27 @@ function SwipeRow(props: {
     if (!draggingRef.current || isDeleting) return;
     draggingRef.current = false;
 
-    // snap open/closed
-    if (dx < -THRESHOLD) setDx(-ACTION_W);
-    else setDx(0);
+    if (dx < -THRESHOLD) {
+      props.setOpenRowId(props.rowId);
+      setDx(-ACTION_W);
+    } else {
+      props.setOpenRowId(null);
+      setDx(0);
+    }
   };
 
   const onTouchCancel = () => {
     draggingRef.current = false;
-    if (!isDeleting) setDx(0);
+    if (!isDeleting) {
+      props.setOpenRowId(null);
+      setDx(0);
+    }
+  };
+
+  const handleEdit = () => {
+    if (isDeleting) return;
+    props.setOpenRowId(null);
+    props.onEdit();
   };
 
   const handleDelete = async () => {
@@ -125,7 +195,7 @@ function SwipeRow(props: {
     try {
       await props.onDelete();
     } finally {
-      // close swipe UI after action
+      props.setOpenRowId(null);
       setDx(0);
       setIsDeleting(false);
     }
@@ -138,9 +208,11 @@ function SwipeRow(props: {
         overflow: "hidden",
         borderRadius: 14,
         border: "1px solid #e5e5e5",
+        userSelect: "none",
       }}
+      onClick={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
     >
-      {/* Right-side action area */}
       <div
         style={{
           position: "absolute",
@@ -149,16 +221,30 @@ function SwipeRow(props: {
           height: "100%",
           width: ACTION_W,
           display: "flex",
-          alignItems: "stretch",
-          justifyContent: "stretch",
         }}
       >
+        <button
+          type="button"
+          onClick={handleEdit}
+          disabled={isDeleting}
+          style={{
+            width: 90,
+            border: "none",
+            cursor: isDeleting ? "not-allowed" : "pointer",
+            fontWeight: 800,
+            color: "white",
+            background: "#2563eb",
+          }}
+        >
+          Edit
+        </button>
+
         <button
           type="button"
           onClick={handleDelete}
           disabled={isDeleting}
           style={{
-            width: "100%",
+            width: 90,
             border: "none",
             cursor: isDeleting ? "not-allowed" : "pointer",
             fontWeight: 800,
@@ -170,7 +256,6 @@ function SwipeRow(props: {
         </button>
       </div>
 
-      {/* Swipeable content */}
       <div
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
@@ -181,7 +266,7 @@ function SwipeRow(props: {
           transition: draggingRef.current ? "none" : "transform 160ms ease-out",
           background: "white",
           padding: 12,
-          touchAction: "pan-y", // allow vertical scroll; we handle horizontal
+          touchAction: "pan-y",
         }}
       >
         {props.children}
@@ -198,18 +283,37 @@ export default function ExpensesListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [range, setRange] = useState<"7" | "30" | "90">("30");
+  const [range, setRange] = useState<RangeOption>("30");
 
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [categories, setCategories] = useState<Record<string, string>>({});
   const [accounts, setAccounts] = useState<Record<string, string>>({});
 
-  const fromDate = useMemo(() => isoDaysAgo(Number(range)), [range]);
+  const [openRowId, setOpenRowId] = useState<string | null>(null);
+
+  const computedBounds = useMemo(() => {
+    if (range === "today") {
+      const d = todayISODate();
+      return { mode: "eq" as const, start: d, endExclusive: null as string | null };
+    }
+    if (range === "this_month") {
+      const b = monthBoundsISO("this");
+      return { mode: "between" as const, start: b.start, endExclusive: b.endExclusive };
+    }
+    if (range === "last_month") {
+      const b = monthBoundsISO("last");
+      return { mode: "between" as const, start: b.start, endExclusive: b.endExclusive };
+    }
+    // last N days: >= fromDate
+    const from = isoDaysAgo(Number(range));
+    return { mode: "gte" as const, start: from, endExclusive: null as string | null };
+  }, [range]);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError(null);
+      setOpenRowId(null);
 
       const { data: authData, error: authErr } = await supabase.auth.getUser();
       if (authErr || !authData?.user) {
@@ -218,7 +322,6 @@ export default function ExpensesListPage() {
         return;
       }
 
-      // categories
       const catQuery = supabase.from("categories").select("id,name") as SimpleQuery;
       const catRes = await catQuery.order("name", { ascending: true });
       if (catRes.error) {
@@ -227,7 +330,6 @@ export default function ExpensesListPage() {
         return;
       }
 
-      // accounts
       const accQuery = supabase.from("accounts").select("id,name,type") as SimpleQuery;
       const accRes = await accQuery.order("name", { ascending: true });
       if (accRes.error) {
@@ -247,14 +349,22 @@ export default function ExpensesListPage() {
       accRows.forEach((a) => (accMap[a.id] = `${a.name} (${a.type})`));
       setAccounts(accMap);
 
-      // expenses list (only expense_date sort)
       const expQuery = supabase
         .from("expenses")
         .select("id,amount,description,expense_date,category_id,account_id") as ExpenseQuery;
 
-      const expRes = await expQuery
-        .gte("expense_date", fromDate)
-        .order("expense_date", { ascending: false });
+      let expRes: QueryResult;
+
+      if (computedBounds.mode === "eq") {
+        expRes = await expQuery.eq("expense_date", computedBounds.start).order("expense_date", { ascending: false });
+      } else if (computedBounds.mode === "between" && computedBounds.endExclusive) {
+        expRes = await expQuery
+          .gte("expense_date", computedBounds.start)
+          .lt("expense_date", computedBounds.endExclusive)
+          .order("expense_date", { ascending: false });
+      } else {
+        expRes = await expQuery.gte("expense_date", computedBounds.start).order("expense_date", { ascending: false });
+      }
 
       if (expRes.error) {
         setError(`Could not load expenses: ${expRes.error.message}`);
@@ -267,7 +377,7 @@ export default function ExpensesListPage() {
     };
 
     load();
-  }, [fromDate, supabase]);
+  }, [computedBounds, supabase]);
 
   const total = useMemo(
     () => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
@@ -275,20 +385,26 @@ export default function ExpensesListPage() {
   );
 
   const deleteExpense = async (id: string) => {
-    // Optimistic UI: remove first
     const prev = expenses;
     setExpenses((xs) => xs.filter((x) => x.id !== id));
 
     const res = await supabaseDel.from("expenses").delete().eq("id", id);
     if (res.error) {
-      // revert if delete failed
       setExpenses(prev);
       setError(`Could not delete expense: ${res.error.message}`);
     }
   };
 
+  const goEdit = (id: string) => {
+    window.location.href = `/expenses/${id}`;
+  };
+
+  const closeOpenRow = () => {
+    if (openRowId) setOpenRowId(null);
+  };
+
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: 16 }}>
+    <main style={{ maxWidth: 720, margin: "0 auto", padding: 16 }} onClick={closeOpenRow} onTouchStart={closeOpenRow}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Expenses</h1>
 
@@ -302,6 +418,8 @@ export default function ExpensesListPage() {
             fontWeight: 700,
             textDecoration: "none",
           }}
+          onClick={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
         >
           + Add Expense
         </a>
@@ -312,9 +430,14 @@ export default function ExpensesListPage() {
           <span>Range</span>
           <select
             value={range}
-            onChange={(e) => setRange(e.target.value as "7" | "30" | "90")}
+            onChange={(e) => setRange(e.target.value as RangeOption)}
             style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
           >
+            <option value="today">Today</option>
+            <option value="this_month">This month</option>
+            <option value="last_month">Last month</option>
             <option value="7">Last 7 days</option>
             <option value="30">Last 30 days</option>
             <option value="90">Last 90 days</option>
@@ -329,16 +452,7 @@ export default function ExpensesListPage() {
       {loading ? (
         <p style={{ marginTop: 14 }}>Loading…</p>
       ) : error ? (
-        <div
-          style={{
-            marginTop: 14,
-            background: "#ffe6e6",
-            padding: 12,
-            borderRadius: 10,
-          }}
-        >
-          {error}
-        </div>
+        <div style={{ marginTop: 14, background: "#ffe6e6", padding: 12, borderRadius: 10 }}>{error}</div>
       ) : expenses.length === 0 ? (
         <div style={{ marginTop: 14, opacity: 0.8 }}>
           No expenses found in this range. <a href="/expenses/new">Add your first one</a>.
@@ -346,16 +460,21 @@ export default function ExpensesListPage() {
       ) : (
         <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
           {expenses.map((e) => (
-            <SwipeRow key={e.id} onDelete={() => deleteExpense(e.id)}>
+            <SwipeRow
+              key={e.id}
+              rowId={e.id}
+              openRowId={openRowId}
+              setOpenRowId={setOpenRowId}
+              onEdit={() => goEdit(e.id)}
+              onDelete={() => deleteExpense(e.id)}
+            >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                 <div style={{ fontWeight: 800 }}>{formatINR(Number(e.amount) || 0)}</div>
                 <div style={{ opacity: 0.7 }}>{e.expense_date}</div>
               </div>
 
               <div style={{ marginTop: 6, fontSize: 14 }}>
-                <div style={{ fontWeight: 600 }}>
-                  {e.description?.trim() ? e.description : "(no description)"}
-                </div>
+                <div style={{ fontWeight: 600 }}>{e.description?.trim() ? e.description : "(no description)"}</div>
                 <div style={{ opacity: 0.8, marginTop: 4 }}>
                   Category: {e.category_id ? categories[e.category_id] || "—" : "—"}
                   <br />
@@ -364,7 +483,7 @@ export default function ExpensesListPage() {
               </div>
 
               <div style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-                Tip: Swipe left to delete
+                Tip: Swipe left for Edit / Delete. Tap outside to close.
               </div>
             </SwipeRow>
           ))}
