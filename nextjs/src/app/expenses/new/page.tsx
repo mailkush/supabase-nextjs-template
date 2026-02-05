@@ -6,6 +6,19 @@ import { createSPAClient } from "@/lib/supabase/client";
 type Category = { id: string; name: string };
 type Account = { id: string; name: string; type: string };
 
+// Minimal interface for the Supabase methods we use, so we avoid `any`
+type LooseSupabase = {
+  auth: {
+    getUser: () => Promise<{ data: { user: { id: string } | null } | null; error: { message: string } | null }>;
+  };
+  from: (table: string) => {
+    select: (columns: string) => {
+      order: (column: string, opts: { ascending: boolean }) => Promise<{ data: unknown[] | null; error: { message: string } | null }>;
+    };
+    insert: (values: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+  };
+};
+
 function todayISODate() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -15,8 +28,8 @@ function todayISODate() {
 }
 
 export default function NewExpensePage() {
-  // Create once so it stays stable across renders
-  const [supabase] = useState(() => createSPAClient());
+  const [supabaseRaw] = useState(() => createSPAClient());
+  const supabase = supabaseRaw as unknown as LooseSupabase;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -45,11 +58,7 @@ export default function NewExpensePage() {
         return;
       }
 
-      // IMPORTANT: your project's Database types don't yet include these tables,
-      // so we use `as any` to avoid TypeScript treating them as `never`.
-      const sb: any = supabase;
-
-      const { data: catData, error: catErr } = await sb
+      const { data: catData, error: catErr } = await supabase
         .from("categories")
         .select("id,name")
         .order("name", { ascending: true });
@@ -60,7 +69,7 @@ export default function NewExpensePage() {
         return;
       }
 
-      const { data: accData, error: accErr } = await sb
+      const { data: accData, error: accErr } = await supabase
         .from("accounts")
         .select("id,name,type")
         .order("name", { ascending: true });
@@ -71,8 +80,8 @@ export default function NewExpensePage() {
         return;
       }
 
-      const cats = (catData ?? []) as Category[];
-      const accs = (accData ?? []) as Account[];
+      const cats = (catData ?? []) as unknown as Category[];
+      const accs = (accData ?? []) as unknown as Account[];
 
       setCategories(cats);
       setAccounts(accs);
@@ -115,9 +124,7 @@ export default function NewExpensePage() {
       return;
     }
 
-    const sb: any = supabase;
-
-    const { error: insErr } = await sb.from("expenses").insert({
+    const { error: insErr } = await supabase.from("expenses").insert({
       user_id: user.id,
       account_id: accountId,
       category_id: categoryId || null,
