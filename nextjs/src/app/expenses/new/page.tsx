@@ -15,7 +15,9 @@ function todayISODate() {
 }
 
 export default function NewExpensePage() {
-  const supabase = createSPAClient();
+  // ✅ create once so it doesn't change on every render
+  const [supabase] = useState(() => createSPAClient());
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -36,10 +38,10 @@ export default function NewExpensePage() {
       setLoading(true);
       setError(null);
 
-      // Check logged-in user (cookie session)
+      // Check logged-in user
       const { data: authData, error: authErr } = await supabase.auth.getUser();
       if (authErr || !authData?.user) {
-        setError("You are not logged in. Please sign in first.");
+        setError("You are not logged in. Please go to /auth/login and sign in.");
         setLoading(false);
         return;
       }
@@ -68,17 +70,21 @@ export default function NewExpensePage() {
         return;
       }
 
-      setCategories((catData || []) as Category[]);
-      setAccounts((accData || []) as Account[]);
+      // ✅ Fix TypeScript "never" issue by explicitly typing the arrays
+      const cats = (catData ?? []) as unknown as Category[];
+      const accs = (accData ?? []) as unknown as Account[];
 
-      if (catData?.length) setCategoryId(catData[0].id);
-      if (accData?.length) setAccountId(accData[0].id);
+      setCategories(cats);
+      setAccounts(accs);
+
+      if (cats.length) setCategoryId(cats[0].id);
+      if (accs.length) setAccountId(accs[0].id);
 
       setLoading(false);
     };
 
     load();
-  }, []);
+  }, [supabase]);
 
   const onSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,7 +110,7 @@ export default function NewExpensePage() {
     const { data: authData } = await supabase.auth.getUser();
     const user = authData?.user;
     if (!user) {
-      setError("You are not logged in. Please sign in again.");
+      setError("You are not logged in. Please go to /auth/login and sign in.");
       setSaving(false);
       return;
     }
