@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createSPAClient } from "@/lib/supabase/client";
 
 type ExpenseRow = {
@@ -16,6 +16,11 @@ type CategoriesRow = { id: string; name: string };
 type AccountsRow = { id: string; name: string; type: string };
 
 type QueryResult = { data: unknown[] | null; error: { message: string } | null };
+type MutResult = { error: { message: string } | null };
+
+type SimpleQuery = {
+  order: (column: string, opts: { ascending: boolean }) => Promise<QueryResult>;
+};
 
 type ExpenseQuery = {
   gte: (column: string, value: string) => {
@@ -23,8 +28,10 @@ type ExpenseQuery = {
   };
 };
 
-type SimpleQuery = {
-  order: (column: string, opts: { ascending: boolean }) => Promise<QueryResult>;
+type DeleteQuery = {
+  delete: () => {
+    eq: (column: string, value: string) => Promise<MutResult>;
+  };
 };
 
 type LooseSupabase = {
@@ -37,6 +44,11 @@ type LooseSupabase = {
   from: (table: string) => {
     select: (columns: string) => SimpleQuery | ExpenseQuery;
   };
+};
+
+// Separate “delete” typing (so we don’t contaminate select typing)
+type LooseSupabaseWithDelete = {
+  from: (table: string) => DeleteQuery;
 };
 
 function isoDaysAgo(days: number) {
@@ -60,9 +72,128 @@ function formatINR(n: number) {
   }
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function SwipeRow(props: {
+  children: React.ReactNode;
+  onDelete: () => Promise<void>;
+}) {
+  const ACTION_W = 96; // px width of Delete area
+  const THRESHOLD = 56; // px swipe threshold to keep open
+
+  const [dx, setDx] = useState(0); // negative = swiped left
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const startXRef = useRef<number | null>(null);
+  const lastDxRef = useRef<number>(0);
+  const draggingRef = useRef(false);
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (isDeleting) return;
+    startXRef.current = e.touches[0].clientX;
+    lastDxRef.current = dx;
+    draggingRef.current = true;
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (!draggingRef.current || startXRef.current === null || isDeleting) return;
+    const x = e.touches[0].clientX;
+    const delta = x - startXRef.current; // left swipe => negative
+    const next = clamp(lastDxRef.current + delta, -ACTION_W, 0);
+    setDx(next);
+  };
+
+  const onTouchEnd = () => {
+    if (!draggingRef.current || isDeleting) return;
+    draggingRef.current = false;
+
+    // snap open/closed
+    if (dx < -THRESHOLD) setDx(-ACTION_W);
+    else setDx(0);
+  };
+
+  const onTouchCancel = () => {
+    draggingRef.current = false;
+    if (!isDeleting) setDx(0);
+  };
+
+  const handleDelete = async () => {
+    if (isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await props.onDelete();
+    } finally {
+      // close swipe UI after action
+      setDx(0);
+      setIsDeleting(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: 14,
+        border: "1px solid #e5e5e5",
+      }}
+    >
+      {/* Right-side action area */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          height: "100%",
+          width: ACTION_W,
+          display: "flex",
+          alignItems: "stretch",
+          justifyContent: "stretch",
+        }}
+      >
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={isDeleting}
+          style={{
+            width: "100%",
+            border: "none",
+            cursor: isDeleting ? "not-allowed" : "pointer",
+            fontWeight: 800,
+            color: "white",
+            background: "#d11a2a",
+          }}
+        >
+          {isDeleting ? "…" : "Delete"}
+        </button>
+      </div>
+
+      {/* Swipeable content */}
+      <div
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchCancel}
+        style={{
+          transform: `translateX(${dx}px)`,
+          transition: draggingRef.current ? "none" : "transform 160ms ease-out",
+          background: "white",
+          padding: 12,
+          touchAction: "pan-y", // allow vertical scroll; we handle horizontal
+        }}
+      >
+        {props.children}
+      </div>
+    </div>
+  );
+}
+
 export default function ExpensesListPage() {
   const [supabaseRaw] = useState(() => createSPAClient());
   const supabase = supabaseRaw as unknown as LooseSupabase;
+  const supabaseDel = supabaseRaw as unknown as LooseSupabaseWithDelete;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +247,7 @@ export default function ExpensesListPage() {
       accRows.forEach((a) => (accMap[a.id] = `${a.name} (${a.type})`));
       setAccounts(accMap);
 
-      // expenses (no created_at sort — only expense_date)
+      // expenses list (only expense_date sort)
       const expQuery = supabase
         .from("expenses")
         .select("id,amount,description,expense_date,category_id,account_id") as ExpenseQuery;
@@ -142,6 +273,19 @@ export default function ExpensesListPage() {
     () => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
     [expenses]
   );
+
+  const deleteExpense = async (id: string) => {
+    // Optimistic UI: remove first
+    const prev = expenses;
+    setExpenses((xs) => xs.filter((x) => x.id !== id));
+
+    const res = await supabaseDel.from("expenses").delete().eq("id", id);
+    if (res.error) {
+      // revert if delete failed
+      setExpenses(prev);
+      setError(`Could not delete expense: ${res.error.message}`);
+    }
+  };
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 16 }}>
@@ -202,16 +346,9 @@ export default function ExpensesListPage() {
       ) : (
         <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
           {expenses.map((e) => (
-            <div
-              key={e.id}
-              style={{
-                border: "1px solid #e5e5e5",
-                borderRadius: 14,
-                padding: 12,
-              }}
-            >
+            <SwipeRow key={e.id} onDelete={() => deleteExpense(e.id)}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                <div style={{ fontWeight: 700 }}>{formatINR(Number(e.amount) || 0)}</div>
+                <div style={{ fontWeight: 800 }}>{formatINR(Number(e.amount) || 0)}</div>
                 <div style={{ opacity: 0.7 }}>{e.expense_date}</div>
               </div>
 
@@ -225,7 +362,11 @@ export default function ExpensesListPage() {
                   Account: {accounts[e.account_id] || "—"}
                 </div>
               </div>
-            </div>
+
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
+                Tip: Swipe left to delete
+              </div>
+            </SwipeRow>
           ))}
         </div>
       )}
