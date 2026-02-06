@@ -127,11 +127,11 @@ function sumAmounts(rows: ExpenseRow[]) {
   return rows.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
 }
 
-function topBuckets(
+// ✅ NEW: build buckets for *all* categories (no topN / others)
+function allBuckets(
   rows: ExpenseRow[],
   getKey: (r: ExpenseRow) => string,
-  getLabel: (key: string) => string,
-  topN: number
+  getLabel: (key: string) => string
 ) {
   const map: Record<string, number> = {};
   for (const r of rows) {
@@ -143,15 +143,8 @@ function topBuckets(
     .map(([key, total]) => ({ key, label: getLabel(key), total }))
     .sort((a, b) => b.total - a.total);
 
-  const top = items.slice(0, topN);
-  const rest = items.slice(topN);
-  const othersTotal = rest.reduce((acc, x) => acc + x.total, 0);
-
-  return {
-    top,
-    othersTotal,
-    total: items.reduce((acc, x) => acc + x.total, 0),
-  };
+  const total = items.reduce((acc, x) => acc + x.total, 0);
+  return { items, total };
 }
 
 function Card(props: { title: string; value: string; subtitle?: string }) {
@@ -344,23 +337,38 @@ export default function DashboardPage() {
 
   const avgPerDay = daysInRange > 0 ? totalSpend / daysInRange : totalSpend;
 
-  const byCategory = useMemo(() => {
+  // ✅ UPDATED: show *all* categories (sorted by total desc), no "Others"
+  const byCategoryAll = useMemo(() => {
     const uncKey = "__uncat__";
-    return topBuckets(
+    return allBuckets(
       expenses,
       (r) => (r.category_id ? r.category_id : uncKey),
-      (key) => (key === uncKey ? "Uncategorised" : catMap[key] || "Unknown category"),
-      8
+      (key) => (key === uncKey ? "Uncategorised" : catMap[key] || "Unknown category")
     );
   }, [expenses, catMap]);
 
+  // (kept as-is)
   const byAccount = useMemo(() => {
-    return topBuckets(expenses, (r) => r.account_id, (key) => accMap[key] || "Unknown account", 8);
+    // still top 8 + others logic unchanged (as per your request)
+    const map: Record<string, number> = {};
+    for (const r of expenses) {
+      const key = r.account_id;
+      map[key] = (map[key] || 0) + (Number(r.amount) || 0);
+    }
+    const items = Object.entries(map)
+      .map(([key, total]) => ({ key, label: accMap[key] || "Unknown account", total }))
+      .sort((a, b) => b.total - a.total);
+
+    const top = items.slice(0, 8);
+    const rest = items.slice(8);
+    const othersTotal = rest.reduce((acc, x) => acc + x.total, 0);
+
+    return { top, othersTotal };
   }, [expenses, accMap]);
 
   const maxCat = useMemo(
-    () => Math.max(byCategory.top.reduce((m, x) => Math.max(m, x.total), 0), byCategory.othersTotal),
-    [byCategory]
+    () => byCategoryAll.items.reduce((m, x) => Math.max(m, x.total), 0),
+    [byCategoryAll]
   );
 
   const maxAcc = useMemo(
@@ -461,17 +469,16 @@ export default function DashboardPage() {
             <div style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                 <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>By category</h2>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Top 8 + Others</div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>All categories</div>
               </div>
 
               {expenses.length === 0 ? (
                 <div style={{ marginTop: 10, opacity: 0.7 }}>No expenses in this range.</div>
               ) : (
                 <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
-                  {byCategory.top.map((x) => (
+                  {byCategoryAll.items.map((x) => (
                     <BarRow key={x.key} label={x.label} value={x.total} max={maxCat} />
                   ))}
-                  {byCategory.othersTotal > 0 ? <BarRow label="Others" value={byCategory.othersTotal} max={maxCat} /> : null}
                 </div>
               )}
             </div>
@@ -489,7 +496,9 @@ export default function DashboardPage() {
                   {byAccount.top.map((x) => (
                     <BarRow key={x.key} label={x.label} value={x.total} max={maxAcc} />
                   ))}
-                  {byAccount.othersTotal > 0 ? <BarRow label="Others" value={byAccount.othersTotal} max={maxAcc} /> : null}
+                  {byAccount.othersTotal > 0 ? (
+                    <BarRow label="Others" value={byAccount.othersTotal} max={maxAcc} />
+                  ) : null}
                 </div>
               )}
             </div>
