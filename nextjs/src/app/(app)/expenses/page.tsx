@@ -126,19 +126,19 @@ function safeIncludes(haystack: string, needle: string) {
   return norm(haystack).includes(norm(needle));
 }
 
+// ✅ no `any` here (passes @typescript-eslint/no-explicit-any)
 function useIsTouchLike() {
   const [isTouch, setIsTouch] = useState(false);
 
   useEffect(() => {
-    // reliable enough for "show hint on desktop" use-case
-    const touchCapable =
-      typeof window !== "undefined" &&
-      (navigator.maxTouchPoints > 0 ||
-        "ontouchstart" in window ||
-        // @ts-expect-error older safari
-        (navigator as any).msMaxTouchPoints > 0);
+    if (typeof window === "undefined") return;
 
-    setIsTouch(!!touchCapable);
+    const nav = navigator as unknown as Record<string, unknown>;
+    const msMaxTouchPoints = typeof nav.msMaxTouchPoints === "number" ? (nav.msMaxTouchPoints as number) : 0;
+
+    const touchCapable = navigator.maxTouchPoints > 0 || "ontouchstart" in window || msMaxTouchPoints > 0;
+
+    setIsTouch(Boolean(touchCapable));
   }, []);
 
   return isTouch;
@@ -208,7 +208,7 @@ function SwipeRow(props: {
     const deltaX = e.clientX - startXRef.current;
     const deltaY = e.clientY - startYRef.current;
 
-    // If the user is clearly scrolling vertically, don't treat it as a swipe.
+    // If user is clearly scrolling vertically, don't treat it as a swipe.
     if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 8) return;
 
     const next = clamp(startDxRef.current + deltaX, -ACTION_W, 0);
@@ -227,7 +227,7 @@ function SwipeRow(props: {
     settle(dx);
   };
 
-  // Trackpad: two-finger horizontal swipe often arrives as WheelEvent with deltaX
+  // Trackpad two-finger horizontal swipe often comes as WheelEvent deltaX
   const onWheel = (e: React.WheelEvent) => {
     if (isDeleting) return;
 
@@ -242,7 +242,7 @@ function SwipeRow(props: {
 
     wheelAccumRef.current += e.deltaX;
 
-    // e.deltaX positive often means "scroll right"; we want left to open
+    // subtract deltaX so "swipe left" opens actions
     const nextDx = clamp(dx - e.deltaX, -ACTION_W, 0);
     setDx(nextDx);
 
@@ -531,7 +531,9 @@ export default function ExpensesListPage() {
   });
 
   const desktopHint =
-    !isTouchLike ? "Tip: Drag left (mouse) or two-finger swipe (trackpad) for Edit / Delete. Click outside to close." : null;
+    !isTouchLike
+      ? "Tip: Drag left (mouse) or two-finger swipe (trackpad) for Edit / Delete. Click outside to close."
+      : null;
 
   return (
     <main onClick={closeOpenRow} onTouchStart={closeOpenRow}>
@@ -684,7 +686,6 @@ export default function ExpensesListPage() {
                 </div>
               </div>
 
-              {/* Mobile-only hint; desktop hint is shown once above the list */}
               {isTouchLike ? (
                 <div style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
                   Tip: Swipe left for Edit / Delete. Tap outside to close.
