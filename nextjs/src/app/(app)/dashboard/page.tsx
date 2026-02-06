@@ -14,12 +14,10 @@ type ExpenseRow = {
 
 type CategoriesRow = { id: string; name: string };
 type AccountsRow = { id: string; name: string; type: string };
-
 type AuthResult = {
   data: { user: { id: string } | null } | null;
   error: { message: string } | null;
 };
-
 type ManyResult = { data: unknown[] | null; error: { message: string } | null };
 
 type SimpleQuery = {
@@ -40,7 +38,8 @@ type LooseSupabase = {
   };
 };
 
-type RangeOption = "today" | "this_month" | "last_month" | "7" | "30" | "90";
+// ✅ Added "all"
+type RangeOption = "all" | "today" | "this_month" | "last_month" | "7" | "30" | "90";
 
 function todayISODate() {
   const d = new Date();
@@ -127,18 +126,12 @@ function sumAmounts(rows: ExpenseRow[]) {
   return rows.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
 }
 
-// ✅ NEW: build buckets for *all* categories (no topN / others)
-function allBuckets(
-  rows: ExpenseRow[],
-  getKey: (r: ExpenseRow) => string,
-  getLabel: (key: string) => string
-) {
+function allBuckets(rows: ExpenseRow[], getKey: (r: ExpenseRow) => string, getLabel: (key: string) => string) {
   const map: Record<string, number> = {};
   for (const r of rows) {
     const key = getKey(r);
     map[key] = (map[key] || 0) + (Number(r.amount) || 0);
   }
-
   const items = Object.entries(map)
     .map(([key, total]) => ({ key, label: getLabel(key), total }))
     .sort((a, b) => b.total - a.total);
@@ -149,26 +142,16 @@ function allBuckets(
 
 function Card(props: { title: string; value: string; subtitle?: string }) {
   return (
-    <div
-      style={{
-        border: "1px solid #e7e7e7",
-        borderRadius: 16,
-        padding: 12,
-        background: "white",
-      }}
-    >
+    <div style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
       <div style={{ fontSize: 13, opacity: 0.7, fontWeight: 700 }}>{props.title}</div>
       <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{props.value}</div>
-      {props.subtitle ? (
-        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{props.subtitle}</div>
-      ) : null}
+      {props.subtitle ? <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{props.subtitle}</div> : null}
     </div>
   );
 }
 
 function BarRow(props: { label: string; value: number; max: number }) {
   const pct = props.max > 0 ? Math.round((props.value / props.max) * 100) : 0;
-
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
@@ -191,9 +174,9 @@ function BarRow(props: { label: string; value: number; max: number }) {
 
 function formatDayLabel(iso: string) {
   const d = new Date(`${iso}T00:00:00`);
-  const dow = d.toLocaleDateString("en-US", { weekday: "short" }); // Mon
+  const dow = d.toLocaleDateString("en-US", { weekday: "short" });
   const dd = String(d.getDate()).padStart(2, "0");
-  const mmm = d.toLocaleDateString("en-US", { month: "short" }); // Jan
+  const mmm = d.toLocaleDateString("en-US", { month: "short" });
   return `${dow} ${dd}-${mmm}`;
 }
 
@@ -225,6 +208,7 @@ export default function DashboardPage() {
   const [supabaseRaw] = useState(() => createSPAClient());
   const supabase = supabaseRaw as unknown as LooseSupabase;
 
+  // ✅ default can stay this_month, or change to "all" if you prefer
   const [range, setRange] = useState<RangeOption>("this_month");
   const [trendOpen, setTrendOpen] = useState(false);
 
@@ -236,6 +220,9 @@ export default function DashboardPage() {
   const [accMap, setAccMap] = useState<Record<string, string>>({});
 
   const computedBounds = useMemo(() => {
+    if (range === "all") {
+      return { mode: "all" as const, start: null as string | null, endExclusive: null as string | null, label: "All time" };
+    }
     if (range === "today") {
       const d = todayISODate();
       return { mode: "eq" as const, start: d, endExclusive: null as string | null, label: "Today" };
@@ -287,21 +274,24 @@ export default function DashboardPage() {
       for (const a of accs) am[a.id] = `${a.name} (${a.type})`;
       setAccMap(am);
 
-      const expQ = supabase
-        .from("expenses")
-        .select("id,amount,expense_date,category_id,account_id") as ExpenseQuery;
+      const expQ = supabase.from("expenses").select("id,amount,expense_date,category_id,account_id") as ExpenseQuery;
 
       let expRes: ManyResult;
 
-      if (computedBounds.mode === "eq") {
+      if (computedBounds.mode === "all") {
+        expRes = await expQ.order("expense_date", { ascending: false });
+      } else if (computedBounds.mode === "eq" && computedBounds.start) {
         expRes = await expQ.eq("expense_date", computedBounds.start).order("expense_date", { ascending: false });
-      } else if (computedBounds.mode === "between" && computedBounds.endExclusive) {
+      } else if (computedBounds.mode === "between" && computedBounds.start && computedBounds.endExclusive) {
         expRes = await expQ
           .gte("expense_date", computedBounds.start)
           .lt("expense_date", computedBounds.endExclusive)
           .order("expense_date", { ascending: false });
-      } else {
+      } else if (computedBounds.mode === "gte" && computedBounds.start) {
         expRes = await expQ.gte("expense_date", computedBounds.start).order("expense_date", { ascending: false });
+      } else {
+        // fallback
+        expRes = await expQ.order("expense_date", { ascending: false });
       }
 
       if (expRes.error) {
@@ -322,8 +312,9 @@ export default function DashboardPage() {
 
   const daysInRange = useMemo(() => {
     if (range === "today") return 1;
+    if (range === "all") return null; // ✅ all-time => not meaningful
 
-    if (computedBounds.mode === "between" && computedBounds.endExclusive) {
+    if (computedBounds.mode === "between" && computedBounds.endExclusive && computedBounds.start) {
       const endISO = endInclusiveFromEndExclusive(computedBounds.endExclusive);
       const s = new Date(`${computedBounds.start}T00:00:00`).getTime();
       const e = new Date(`${endISO}T00:00:00`).getTime();
@@ -335,9 +326,12 @@ export default function DashboardPage() {
     return Number.isFinite(n) && n > 0 ? n : 1;
   }, [computedBounds, range]);
 
-  const avgPerDay = daysInRange > 0 ? totalSpend / daysInRange : totalSpend;
+  const avgPerDay = useMemo(() => {
+    if (daysInRange === null) return null; // ✅ all-time
+    const denom = daysInRange > 0 ? daysInRange : 1;
+    return totalSpend / denom;
+  }, [daysInRange, totalSpend]);
 
-  // ✅ UPDATED: show *all* categories (sorted by total desc), no "Others"
   const byCategoryAll = useMemo(() => {
     const uncKey = "__uncat__";
     return allBuckets(
@@ -347,34 +341,7 @@ export default function DashboardPage() {
     );
   }, [expenses, catMap]);
 
-  // (kept as-is)
-  const byAccount = useMemo(() => {
-    // still top 8 + others logic unchanged (as per your request)
-    const map: Record<string, number> = {};
-    for (const r of expenses) {
-      const key = r.account_id;
-      map[key] = (map[key] || 0) + (Number(r.amount) || 0);
-    }
-    const items = Object.entries(map)
-      .map(([key, total]) => ({ key, label: accMap[key] || "Unknown account", total }))
-      .sort((a, b) => b.total - a.total);
-
-    const top = items.slice(0, 8);
-    const rest = items.slice(8);
-    const othersTotal = rest.reduce((acc, x) => acc + x.total, 0);
-
-    return { top, othersTotal };
-  }, [expenses, accMap]);
-
-  const maxCat = useMemo(
-    () => byCategoryAll.items.reduce((m, x) => Math.max(m, x.total), 0),
-    [byCategoryAll]
-  );
-
-  const maxAcc = useMemo(
-    () => Math.max(byAccount.top.reduce((m, x) => Math.max(m, x.total), 0), byAccount.othersTotal),
-    [byAccount]
-  );
+  const maxCat = useMemo(() => byCategoryAll.items.reduce((m, x) => Math.max(m, x.total), 0), [byCategoryAll]);
 
   // Daily trend (fills missing days with 0)
   const trend = useMemo(() => {
@@ -384,16 +351,35 @@ export default function DashboardPage() {
       sumByDate[d] = (sumByDate[d] || 0) + (Number(e.amount) || 0);
     }
 
-    const start = computedBounds.start;
-    let endInclusive: string;
+    // ✅ For all-time, compute start/end from data (keeps it bounded)
+    const startFromData = () => {
+      if (expenses.length === 0) return null;
+      let min = expenses[0].expense_date;
+      for (const e of expenses) if (e.expense_date < min) min = e.expense_date;
+      return min;
+    };
+    const endFromData = () => {
+      if (expenses.length === 0) return null;
+      let max = expenses[0].expense_date;
+      for (const e of expenses) if (e.expense_date > max) max = e.expense_date;
+      return max;
+    };
 
-    if (computedBounds.mode === "eq") {
-      endInclusive = start;
-    } else if (computedBounds.mode === "between" && computedBounds.endExclusive) {
-      endInclusive = endInclusiveFromEndExclusive(computedBounds.endExclusive);
+    let start: string | null = null;
+    let endInclusive: string | null = null;
+
+    if (computedBounds.mode === "all") {
+      start = startFromData();
+      endInclusive = endFromData();
     } else {
-      endInclusive = todayISODate();
+      start = computedBounds.start;
+      if (!start) return [];
+      if (computedBounds.mode === "eq") endInclusive = start;
+      else if (computedBounds.mode === "between" && computedBounds.endExclusive) endInclusive = endInclusiveFromEndExclusive(computedBounds.endExclusive);
+      else endInclusive = todayISODate();
     }
+
+    if (!start || !endInclusive) return [];
 
     const out: { date: string; total: number }[] = [];
     let cur = start;
@@ -425,6 +411,7 @@ export default function DashboardPage() {
             onChange={(e) => setRange(e.target.value as RangeOption)}
             style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
           >
+            <option value="all">All time</option>
             <option value="today">Today</option>
             <option value="this_month">This month</option>
             <option value="last_month">Last month</option>
@@ -454,7 +441,11 @@ export default function DashboardPage() {
             }}
           >
             <Card title="Total spend" value={formatINR(totalSpend)} subtitle={`${txCount} transactions`} />
-            <Card title="Avg per day" value={formatINR(avgPerDay)} subtitle={`${daysInRange} day(s) in range`} />
+            <Card
+              title="Avg per day"
+              value={avgPerDay === null ? "—" : formatINR(avgPerDay)}
+              subtitle={daysInRange === null ? "All time" : `${daysInRange} day(s) in range`}
+            />
             <Card title="Transactions" value={`${txCount}`} subtitle="Count in selected range" />
           </div>
 
@@ -479,26 +470,6 @@ export default function DashboardPage() {
                   {byCategoryAll.items.map((x) => (
                     <BarRow key={x.key} label={x.label} value={x.total} max={maxCat} />
                   ))}
-                </div>
-              )}
-            </div>
-
-            <div style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>By account</h2>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Top 8 + Others</div>
-              </div>
-
-              {expenses.length === 0 ? (
-                <div style={{ marginTop: 10, opacity: 0.7 }}>No expenses in this range.</div>
-              ) : (
-                <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
-                  {byAccount.top.map((x) => (
-                    <BarRow key={x.key} label={x.label} value={x.total} max={maxAcc} />
-                  ))}
-                  {byAccount.othersTotal > 0 ? (
-                    <BarRow label="Others" value={byAccount.othersTotal} max={maxAcc} />
-                  ) : null}
                 </div>
               )}
             </div>
@@ -532,7 +503,7 @@ export default function DashboardPage() {
             {trendOpen ? (
               <div style={{ padding: "0 12px 12px 12px" }}>
                 <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>
-                  Showing {trend.length > 31 ? "last 31 days of range" : "all days in range"} • 0-spend days included
+                  Showing {trend.length > 31 ? "last 31 days" : "all days"} • 0-spend days included
                 </div>
 
                 {trendToShow.length === 0 ? (
