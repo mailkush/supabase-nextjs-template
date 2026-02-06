@@ -126,6 +126,24 @@ function safeIncludes(haystack: string, needle: string) {
   return norm(haystack).includes(norm(needle));
 }
 
+function useIsTouchLike() {
+  const [isTouch, setIsTouch] = useState(false);
+
+  useEffect(() => {
+    // reliable enough for "show hint on desktop" use-case
+    const touchCapable =
+      typeof window !== "undefined" &&
+      (navigator.maxTouchPoints > 0 ||
+        "ontouchstart" in window ||
+        // @ts-expect-error older safari
+        (navigator as any).msMaxTouchPoints > 0);
+
+    setIsTouch(!!touchCapable);
+  }, []);
+
+  return isTouch;
+}
+
 function SwipeRow(props: {
   rowId: string;
   openRowId: string | null;
@@ -143,39 +161,19 @@ function SwipeRow(props: {
   const [isDeleting, setIsDeleting] = useState(false);
 
   const startXRef = useRef<number | null>(null);
+  const startYRef = useRef<number | null>(null);
   const startDxRef = useRef<number>(0);
   const draggingRef = useRef(false);
+  const pointerIdRef = useRef<number | null>(null);
+  const wheelAccumRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen) setDx(0);
     if (isOpen) setDx(-ACTION_W);
   }, [isOpen]);
 
-  const onTouchStart = (e: React.TouchEvent) => {
-    if (isDeleting) return;
-
-    if (props.openRowId && props.openRowId !== props.rowId) {
-      props.setOpenRowId(null);
-    }
-
-    startXRef.current = e.touches[0].clientX;
-    startDxRef.current = dx;
-    draggingRef.current = true;
-  };
-
-  const onTouchMove = (e: React.TouchEvent) => {
-    if (!draggingRef.current || startXRef.current === null || isDeleting) return;
-    const x = e.touches[0].clientX;
-    const delta = x - startXRef.current;
-    const next = clamp(startDxRef.current + delta, -ACTION_W, 0);
-    setDx(next);
-  };
-
-  const onTouchEnd = () => {
-    if (!draggingRef.current || isDeleting) return;
-    draggingRef.current = false;
-
-    if (dx < -THRESHOLD) {
+  const settle = (nextDx: number) => {
+    if (nextDx < -THRESHOLD) {
       props.setOpenRowId(props.rowId);
       setDx(-ACTION_W);
     } else {
@@ -184,21 +182,83 @@ function SwipeRow(props: {
     }
   };
 
-  const onTouchCancel = () => {
-    draggingRef.current = false;
-    if (!isDeleting) {
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (isDeleting) return;
+
+    if (props.openRowId && props.openRowId !== props.rowId) {
       props.setOpenRowId(null);
-      setDx(0);
+    }
+
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+
+    pointerIdRef.current = e.pointerId;
+    startXRef.current = e.clientX;
+    startYRef.current = e.clientY;
+    startDxRef.current = dx;
+    draggingRef.current = true;
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!draggingRef.current) return;
+    if (pointerIdRef.current !== e.pointerId) return;
+    if (startXRef.current === null || startYRef.current === null || isDeleting) return;
+
+    const deltaX = e.clientX - startXRef.current;
+    const deltaY = e.clientY - startYRef.current;
+
+    // If the user is clearly scrolling vertically, don't treat it as a swipe.
+    if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 8) return;
+
+    const next = clamp(startDxRef.current + deltaX, -ACTION_W, 0);
+    setDx(next);
+  };
+
+  const onPointerUpOrCancel = (e: React.PointerEvent) => {
+    if (pointerIdRef.current !== e.pointerId) return;
+
+    draggingRef.current = false;
+    pointerIdRef.current = null;
+    startXRef.current = null;
+    startYRef.current = null;
+
+    if (isDeleting) return;
+    settle(dx);
+  };
+
+  // Trackpad: two-finger horizontal swipe often arrives as WheelEvent with deltaX
+  const onWheel = (e: React.WheelEvent) => {
+    if (isDeleting) return;
+
+    if (Math.abs(e.deltaX) < Math.abs(e.deltaY)) return;
+    if (Math.abs(e.deltaX) < 6) return;
+
+    e.preventDefault();
+
+    if (props.openRowId && props.openRowId !== props.rowId) {
+      props.setOpenRowId(null);
+    }
+
+    wheelAccumRef.current += e.deltaX;
+
+    // e.deltaX positive often means "scroll right"; we want left to open
+    const nextDx = clamp(dx - e.deltaX, -ACTION_W, 0);
+    setDx(nextDx);
+
+    if (Math.abs(wheelAccumRef.current) > THRESHOLD) {
+      wheelAccumRef.current = 0;
+      settle(nextDx);
     }
   };
 
   const handleEdit = () => {
     if (isDeleting) return;
     props.setOpenRowId(null);
+    setDx(0);
     props.onEdit();
   };
 
-  // ✅ fixed: removed the typo block and kept a normal try/await/finally
   const handleDelete = async () => {
     if (isDeleting) return;
     setIsDeleting(true);
@@ -267,10 +327,11 @@ function SwipeRow(props: {
       </div>
 
       <div
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
-        onTouchCancel={onTouchCancel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUpOrCancel}
+        onPointerCancel={onPointerUpOrCancel}
+        onWheel={onWheel}
         style={{
           transform: `translateX(${dx}px)`,
           transition: draggingRef.current ? "none" : "transform 160ms ease-out",
@@ -289,6 +350,8 @@ export default function ExpensesListPage() {
   const [supabaseRaw] = useState(() => createSPAClient());
   const supabase = supabaseRaw as unknown as LooseSupabase;
   const supabaseDel = supabaseRaw as unknown as LooseSupabaseWithDelete;
+
+  const isTouchLike = useIsTouchLike();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -467,6 +530,9 @@ export default function ExpensesListPage() {
     whiteSpace: "nowrap",
   });
 
+  const desktopHint =
+    !isTouchLike ? "Tip: Drag left (mouse) or two-finger swipe (trackpad) for Edit / Delete. Click outside to close." : null;
+
   return (
     <main onClick={closeOpenRow} onTouchStart={closeOpenRow}>
       <div style={{ display: "grid", gap: 10 }}>
@@ -581,6 +647,8 @@ export default function ExpensesListPage() {
             Showing <b>{filteredExpenses.length}</b> of <b>{expenses.length}</b> expenses
           </div>
         )}
+
+        {desktopHint ? <div style={{ fontSize: 12, opacity: 0.55 }}>{desktopHint}</div> : null}
       </div>
 
       {loading ? (
@@ -616,9 +684,12 @@ export default function ExpensesListPage() {
                 </div>
               </div>
 
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-                Tip: Swipe left for Edit / Delete. Tap outside to close.
-              </div>
+              {/* Mobile-only hint; desktop hint is shown once above the list */}
+              {isTouchLike ? (
+                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
+                  Tip: Swipe left for Edit / Delete. Tap outside to close.
+                </div>
+              ) : null}
             </SwipeRow>
           ))}
         </div>
