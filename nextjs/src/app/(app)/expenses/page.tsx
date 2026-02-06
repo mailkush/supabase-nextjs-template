@@ -53,10 +53,8 @@ type LooseSupabaseWithDelete = {
   from: (table: string) => DeleteQuery;
 };
 
-type RangeOption = "today" | "this_month" | "last_month" | "7" | "30" | "90";
-
-// Category filter: "all" | "uncat" | category_id
-type CategoryFilter = "all" | "uncat" | string;
+type RangeOption = "all" | "today" | "this_month" | "last_month" | "7" | "30" | "90";
+type CatToken = "uncat" | string;
 
 function todayISODate() {
   const d = new Date();
@@ -83,7 +81,7 @@ function firstDayOfMonthISO(year: number, month1to12: number) {
 function monthBoundsISO(which: "this" | "last") {
   const now = new Date();
   const y = now.getFullYear();
-  const m = now.getMonth() + 1; // 1-12
+  const m = now.getMonth() + 1;
 
   if (which === "this") {
     const start = firstDayOfMonthISO(y, m);
@@ -119,11 +117,19 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function norm(s: string) {
+  return s.trim().toLowerCase();
+}
+
+function safeIncludes(haystack: string, needle: string) {
+  if (!needle) return true;
+  return norm(haystack).includes(norm(needle));
+}
+
 function SwipeRow(props: {
   rowId: string;
   openRowId: string | null;
   setOpenRowId: (id: string | null) => void;
-
   children: React.ReactNode;
   onEdit: () => void;
   onDelete: () => Promise<void>;
@@ -192,6 +198,7 @@ function SwipeRow(props: {
     props.onEdit();
   };
 
+  // ✅ fixed: removed the typo block and kept a normal try/await/finally
   const handleDelete = async () => {
     if (isDeleting) return;
     setIsDeleting(true);
@@ -287,7 +294,8 @@ export default function ExpensesListPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [range, setRange] = useState<RangeOption>("30");
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [selectedCats, setSelectedCats] = useState<CatToken[]>([]);
+  const [search, setSearch] = useState("");
 
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [categories, setCategories] = useState<Record<string, string>>({});
@@ -297,6 +305,9 @@ export default function ExpensesListPage() {
   const [openRowId, setOpenRowId] = useState<string | null>(null);
 
   const computedBounds = useMemo(() => {
+    if (range === "all") {
+      return { mode: "all" as const, start: null as string | null, endExclusive: null as string | null };
+    }
     if (range === "today") {
       const d = todayISODate();
       return { mode: "eq" as const, start: d, endExclusive: null as string | null };
@@ -358,22 +369,16 @@ export default function ExpensesListPage() {
         .from("expenses")
         .select("id,amount,description,expense_date,category_id,account_id") as ExpenseQuery;
 
-      // Apply date filters first
       let expQuery: ExpenseQuery = expQueryBase;
 
-      if (computedBounds.mode === "eq") {
+      if (computedBounds.mode === "all") {
+        // no-op
+      } else if (computedBounds.mode === "eq" && computedBounds.start) {
         expQuery = expQuery.eq("expense_date", computedBounds.start);
-      } else if (computedBounds.mode === "between" && computedBounds.endExclusive) {
+      } else if (computedBounds.mode === "between" && computedBounds.start && computedBounds.endExclusive) {
         expQuery = expQuery.gte("expense_date", computedBounds.start).lt("expense_date", computedBounds.endExclusive);
-      } else {
+      } else if (computedBounds.mode === "gte" && computedBounds.start) {
         expQuery = expQuery.gte("expense_date", computedBounds.start);
-      }
-
-      // Apply category filter
-      if (categoryFilter === "uncat") {
-        expQuery = expQuery.is("category_id", null);
-      } else if (categoryFilter !== "all") {
-        expQuery = expQuery.eq("category_id", categoryFilter);
       }
 
       const expRes = await expQuery.order("expense_date", { ascending: false });
@@ -389,20 +394,55 @@ export default function ExpensesListPage() {
     };
 
     load();
-  }, [computedBounds, supabase, categoryFilter]);
+  }, [computedBounds, supabase]);
+
+  const toggleCat = (token: CatToken) => {
+    setSelectedCats((prev) => {
+      const has = prev.includes(token);
+      return has ? prev.filter((x) => x !== token) : [...prev, token];
+    });
+  };
+
+  const clearCats = () => setSelectedCats([]);
+
+  const filteredExpenses = useMemo(() => {
+    const s = norm(search);
+
+    const catActive = selectedCats.length > 0;
+    const allowUncat = selectedCats.includes("uncat");
+    const allowIds = new Set(selectedCats.filter((x) => x !== "uncat"));
+
+    return expenses.filter((e) => {
+      if (catActive) {
+        if (e.category_id === null) {
+          if (!allowUncat) return false;
+        } else {
+          if (!allowIds.has(e.category_id)) return false;
+        }
+      }
+
+      if (!s) return true;
+
+      const amountStr = String(Number(e.amount) || 0);
+      const desc = e.description ?? "";
+      const acc = accounts[e.account_id] ?? "";
+
+      return safeIncludes(amountStr, s) || safeIncludes(desc, s) || safeIncludes(acc, s);
+    });
+  }, [expenses, selectedCats, search, accounts]);
 
   const total = useMemo(
-    () => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
-    [expenses]
+    () => filteredExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
+    [filteredExpenses]
   );
 
   const deleteExpense = async (id: string) => {
-    const prev = expenses;
+    const prevAll = expenses;
     setExpenses((xs) => xs.filter((x) => x.id !== id));
 
     const res = await supabaseDel.from("expenses").delete().eq("id", id);
     if (res.error) {
-      setExpenses(prev);
+      setExpenses(prevAll);
       setError(`Could not delete expense: ${res.error.message}`);
     }
   };
@@ -415,62 +455,145 @@ export default function ExpensesListPage() {
     if (openRowId) setOpenRowId(null);
   };
 
+  const chipStyle = (active: boolean): React.CSSProperties => ({
+    padding: "8px 10px",
+    borderRadius: 999,
+    border: "1px solid #ddd",
+    background: active ? "#111" : "white",
+    color: active ? "white" : "#111",
+    fontWeight: 800,
+    cursor: "pointer",
+    userSelect: "none",
+    whiteSpace: "nowrap",
+  });
+
   return (
     <main onClick={closeOpenRow} onTouchStart={closeOpenRow}>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span>Range</span>
-          <select
-            value={range}
-            onChange={(e) => setRange(e.target.value as RangeOption)}
-            style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
-            onClick={(e) => e.stopPropagation()}
-            onTouchStart={(e) => e.stopPropagation()}
-          >
-            <option value="today">Today</option>
-            <option value="this_month">This month</option>
-            <option value="last_month">Last month</option>
-            <option value="7">Last 7 days</option>
-            <option value="30">Last 30 days</option>
-            <option value="90">Last 90 days</option>
-          </select>
-        </label>
+      <div style={{ display: "grid", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span>Range</span>
+            <select
+              value={range}
+              onChange={(e) => setRange(e.target.value as RangeOption)}
+              style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
+              onClick={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+            >
+              <option value="all">All time</option>
+              <option value="today">Today</option>
+              <option value="this_month">This month</option>
+              <option value="last_month">Last month</option>
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </label>
 
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span>Category</span>
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
-            style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
-            onClick={(e) => e.stopPropagation()}
-            onTouchStart={(e) => e.stopPropagation()}
-          >
-            <option value="all">All</option>
-            <option value="uncat">Uncategorised</option>
-            {categoryOptions.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div style={{ marginLeft: "auto", opacity: 0.8 }}>
-          Total: <b>{formatINR(total)}</b>
+          <div style={{ marginLeft: "auto", opacity: 0.8 }}>
+            Total: <b>{formatINR(total)}</b>
+          </div>
         </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <label style={{ flex: 1, minWidth: 220, display: "grid", gap: 6 }}>
+            <span style={{ fontSize: 12, opacity: 0.75 }}>Search (amount, description, account)</span>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="e.g. 500, dinner, HDFC…"
+              style={{
+                padding: 10,
+                borderRadius: 12,
+                border: "1px solid #ccc",
+                background: "white",
+              }}
+              onClick={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+            />
+          </label>
+
+          {search.trim() ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSearch("");
+              }}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                border: "1px solid #ddd",
+                background: "white",
+                fontWeight: 800,
+                cursor: "pointer",
+                height: 42,
+                alignSelf: "end",
+              }}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, opacity: 0.75, marginRight: 4 }}>Categories</span>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              clearCats();
+            }}
+            style={chipStyle(selectedCats.length === 0)}
+          >
+            All
+          </button>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleCat("uncat");
+            }}
+            style={chipStyle(selectedCats.includes("uncat"))}
+          >
+            Uncategorised
+          </button>
+
+          {categoryOptions.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleCat(c.id);
+              }}
+              style={chipStyle(selectedCats.includes(c.id))}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+
+        {(selectedCats.length > 0 || search.trim()) && (
+          <div style={{ fontSize: 12, opacity: 0.65 }}>
+            Showing <b>{filteredExpenses.length}</b> of <b>{expenses.length}</b> expenses
+          </div>
+        )}
       </div>
 
       {loading ? (
         <p style={{ marginTop: 14 }}>Loading…</p>
       ) : error ? (
         <div style={{ marginTop: 14, background: "#ffe6e6", padding: 12, borderRadius: 10 }}>{error}</div>
-      ) : expenses.length === 0 ? (
+      ) : filteredExpenses.length === 0 ? (
         <div style={{ marginTop: 14, opacity: 0.8 }}>
-          No expenses found in this range. <Link href="/expenses/new">Add your first one</Link>.
+          No expenses found with these filters. <Link href="/expenses/new">Add a new one</Link>.
         </div>
       ) : (
         <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-          {expenses.map((e) => (
+          {filteredExpenses.map((e) => (
             <SwipeRow
               key={e.id}
               rowId={e.id}
