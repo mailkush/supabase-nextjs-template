@@ -27,6 +27,7 @@ type ExpenseQuery = {
   gte: (column: string, value: string) => ExpenseQuery;
   lt: (column: string, value: string) => ExpenseQuery;
   eq: (column: string, value: string) => ExpenseQuery;
+  is: (column: string, value: null) => ExpenseQuery;
   order: (column: string, opts: { ascending: boolean }) => Promise<QueryResult>;
 };
 
@@ -53,6 +54,9 @@ type LooseSupabaseWithDelete = {
 };
 
 type RangeOption = "today" | "this_month" | "last_month" | "7" | "30" | "90";
+
+// Category filter: "all" | "uncat" | category_id
+type CategoryFilter = "all" | "uncat" | string;
 
 function todayISODate() {
   const d = new Date();
@@ -283,9 +287,11 @@ export default function ExpensesListPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [range, setRange] = useState<RangeOption>("30");
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
 
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [categories, setCategories] = useState<Record<string, string>>({});
+  const [categoryOptions, setCategoryOptions] = useState<CategoriesRow[]>([]);
   const [accounts, setAccounts] = useState<Record<string, string>>({});
 
   const [openRowId, setOpenRowId] = useState<string | null>(null);
@@ -342,27 +348,35 @@ export default function ExpensesListPage() {
       const catMap: Record<string, string> = {};
       catRows.forEach((c) => (catMap[c.id] = c.name));
       setCategories(catMap);
+      setCategoryOptions(catRows);
 
       const accMap: Record<string, string> = {};
       accRows.forEach((a) => (accMap[a.id] = `${a.name} (${a.type})`));
       setAccounts(accMap);
 
-      const expQuery = supabase
+      const expQueryBase = supabase
         .from("expenses")
         .select("id,amount,description,expense_date,category_id,account_id") as ExpenseQuery;
 
-      let expRes: QueryResult;
+      // Apply date filters first
+      let expQuery: ExpenseQuery = expQueryBase;
 
       if (computedBounds.mode === "eq") {
-        expRes = await expQuery.eq("expense_date", computedBounds.start).order("expense_date", { ascending: false });
+        expQuery = expQuery.eq("expense_date", computedBounds.start);
       } else if (computedBounds.mode === "between" && computedBounds.endExclusive) {
-        expRes = await expQuery
-          .gte("expense_date", computedBounds.start)
-          .lt("expense_date", computedBounds.endExclusive)
-          .order("expense_date", { ascending: false });
+        expQuery = expQuery.gte("expense_date", computedBounds.start).lt("expense_date", computedBounds.endExclusive);
       } else {
-        expRes = await expQuery.gte("expense_date", computedBounds.start).order("expense_date", { ascending: false });
+        expQuery = expQuery.gte("expense_date", computedBounds.start);
       }
+
+      // Apply category filter
+      if (categoryFilter === "uncat") {
+        expQuery = expQuery.is("category_id", null);
+      } else if (categoryFilter !== "all") {
+        expQuery = expQuery.eq("category_id", categoryFilter);
+      }
+
+      const expRes = await expQuery.order("expense_date", { ascending: false });
 
       if (expRes.error) {
         setError(`Could not load expenses: ${expRes.error.message}`);
@@ -375,9 +389,12 @@ export default function ExpensesListPage() {
     };
 
     load();
-  }, [computedBounds, supabase]);
+  }, [computedBounds, supabase, categoryFilter]);
 
-  const total = useMemo(() => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0), [expenses]);
+  const total = useMemo(
+    () => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
+    [expenses]
+  );
 
   const deleteExpense = async (id: string) => {
     const prev = expenses;
@@ -416,6 +433,25 @@ export default function ExpensesListPage() {
             <option value="7">Last 7 days</option>
             <option value="30">Last 30 days</option>
             <option value="90">Last 90 days</option>
+          </select>
+        </label>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span>Category</span>
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
+            style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+          >
+            <option value="all">All</option>
+            <option value="uncat">Uncategorised</option>
+            {categoryOptions.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
           </select>
         </label>
 
