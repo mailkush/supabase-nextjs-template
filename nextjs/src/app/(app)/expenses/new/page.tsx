@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createSPAClient } from "@/lib/supabase/client";
 
 type CategoryLite = { id: string; name: string };
 type AccountLite = { id: string; name: string; type: string };
@@ -15,6 +17,32 @@ type DraftExpense = {
   warnings: string[];
 };
 
+type QueryResult = { data: unknown[] | null; error: { message: string } | null };
+
+type SimpleQuery = {
+  order: (column: string, opts: { ascending: boolean }) => Promise<QueryResult>;
+};
+
+type InsertQuery = {
+  insert: (values: Record<string, unknown>) => {
+    select: (cols: string) => {
+      single: () => Promise<{ data: unknown | null; error: { message: string } | null }>;
+    };
+  };
+};
+
+type LooseSupabase = {
+  auth: {
+    getUser: () => Promise<{
+      data: { user: { id: string; email?: string | null } | null } | null;
+      error: { message: string } | null;
+    }>;
+  };
+  from: (table: string) => {
+    select: (columns: string) => SimpleQuery;
+  } & InsertQuery;
+};
+
 async function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -24,7 +52,7 @@ async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-export function ScanReceiptDraft(props: {
+function ScanReceiptDraft(props: {
   categories: CategoryLite[];
   accounts: AccountLite[];
   onApply: (draft: DraftExpense) => void; // parent fills form state from this
@@ -93,13 +121,11 @@ export function ScanReceiptDraft(props: {
           : null;
 
       if (!draftObj) throw new Error("Parser returned no draft");
-
       setDraft(draftObj);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Something went wrong");
     } finally {
       setBusy(false);
-      // ✅ allow uploading the same file again
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -176,12 +202,10 @@ export function ScanReceiptDraft(props: {
                 <b>Description:</b> {draft.description ?? "—"}
               </div>
               <div>
-                <b>Category:</b>{" "}
-                {draft.category_id ? catName[draft.category_id] ?? "(unknown category)" : "—"}
+                <b>Category:</b> {draft.category_id ? catName[draft.category_id] ?? "(unknown)" : "—"}
               </div>
               <div>
-                <b>Account:</b>{" "}
-                {draft.account_id ? accName[draft.account_id] ?? "(unknown account)" : "—"}
+                <b>Account:</b> {draft.account_id ? accName[draft.account_id] ?? "(unknown)" : "—"}
               </div>
             </div>
           </div>
@@ -204,5 +228,231 @@ export function ScanReceiptDraft(props: {
         </div>
       ) : null}
     </div>
+  );
+}
+
+export default function NewExpensePage() {
+  const router = useRouter();
+
+  const [supabaseRaw] = useState(() => createSPAClient());
+  const supabase = supabaseRaw as unknown as LooseSupabase;
+
+  const [userId, setUserId] = useState<string | null>(null);
+
+  const [categories, setCategories] = useState<CategoryLite[]>([]);
+  const [accounts, setAccounts] = useState<AccountLite[]>([]);
+
+  const [amount, setAmount] = useState<string>("");
+  const [expenseDate, setExpenseDate] = useState<string>("");
+  const [description, setDescription] = useState<string>("");
+  const [categoryId, setCategoryId] = useState<string>("");
+  const [accountId, setAccountId] = useState<string>("");
+
+  const [loadingLists, setLoadingLists] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadLists = async () => {
+      setLoadingLists(true);
+      setError(null);
+
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData?.user) {
+        router.replace("/auth/login");
+        return;
+      }
+      setUserId(authData.user.id);
+
+      const catQ = supabase.from("categories").select("id,name") as SimpleQuery;
+      const catRes = await catQ.order("name", { ascending: true });
+      if (catRes.error) {
+        setError(`Could not load categories: ${catRes.error.message}`);
+        setLoadingLists(false);
+        return;
+      }
+      setCategories((catRes.data ?? []) as unknown as CategoryLite[]);
+
+      const accQ = supabase.from("accounts").select("id,name,type") as SimpleQuery;
+      const accRes = await accQ.order("name", { ascending: true });
+      if (accRes.error) {
+        setError(`Could not load accounts: ${accRes.error.message}`);
+        setLoadingLists(false);
+        return;
+      }
+      setAccounts((accRes.data ?? []) as unknown as AccountLite[]);
+
+      // sensible defaults
+      if (!expenseDate) {
+        const d = new Date();
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        setExpenseDate(`${yyyy}-${mm}-${dd}`);
+      }
+
+      setLoadingLists(false);
+    };
+
+    loadLists();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router, supabase]);
+
+  const onApplyDraft = (draft: DraftExpense) => {
+    if (draft.amount !== null && Number.isFinite(draft.amount)) setAmount(String(draft.amount));
+    if (draft.expense_date) setExpenseDate(draft.expense_date);
+    if (draft.description) setDescription(draft.description);
+    if (draft.category_id) setCategoryId(draft.category_id);
+    if (draft.account_id) setAccountId(draft.account_id);
+  };
+
+  const onSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!userId) {
+      setError("Not logged in. Please sign in again.");
+      return;
+    }
+
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setError("Enter a valid amount.");
+      return;
+    }
+    if (!expenseDate) {
+      setError("Select a date.");
+      return;
+    }
+    if (!accountId) {
+      setError("Select an account.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const payload: Record<string, unknown> = {
+        user_id: userId, // ✅ REQUIRED because your table enforces it (FK -> profiles.id)
+        amount: amt,
+        expense_date: expenseDate,
+        description: description.trim() ? description.trim() : null,
+        category_id: categoryId ? categoryId : null,
+        account_id: accountId,
+      };
+
+      const res = await supabase.from("expenses").insert(payload).select("id").single();
+      if (res.error) throw new Error(res.error.message);
+
+      router.push("/expenses");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save expense");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <main style={{ display: "grid", gap: 12 }}>
+      {error ? (
+        <div style={{ background: "#ffe6e6", padding: 12, borderRadius: 12, border: "1px solid #ffcccc" }}>
+          {error}
+        </div>
+      ) : null}
+
+      {loadingLists ? (
+        <div style={{ opacity: 0.75 }}>Loading…</div>
+      ) : (
+        <>
+          <ScanReceiptDraft categories={categories} accounts={accounts} onApply={onApplyDraft} />
+
+          <form onSubmit={onSave} style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>New expense</div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, opacity: 0.75 }}>Amount</span>
+                <input
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="e.g. 450"
+                  style={{ padding: 10, borderRadius: 12, border: "1px solid #ccc" }}
+                />
+              </label>
+
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, opacity: 0.75 }}>Date</span>
+                <input
+                  value={expenseDate}
+                  onChange={(e) => setExpenseDate(e.target.value)}
+                  type="date"
+                  style={{ padding: 10, borderRadius: 12, border: "1px solid #ccc" }}
+                />
+              </label>
+
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, opacity: 0.75 }}>Description</span>
+                <input
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="e.g. Lunch"
+                  style={{ padding: 10, borderRadius: 12, border: "1px solid #ccc" }}
+                />
+              </label>
+
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, opacity: 0.75 }}>Category</span>
+                <select
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                  style={{ padding: 10, borderRadius: 12, border: "1px solid #ccc", background: "white" }}
+                >
+                  <option value="">—</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, opacity: 0.75 }}>Account</span>
+                <select
+                  value={accountId}
+                  onChange={(e) => setAccountId(e.target.value)}
+                  style={{ padding: 10, borderRadius: 12, border: "1px solid #ccc", background: "white" }}
+                >
+                  <option value="">Select…</option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} ({a.type})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                type="submit"
+                disabled={saving}
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "none",
+                  fontWeight: 950,
+                  cursor: saving ? "not-allowed" : "pointer",
+                  background: "#111",
+                  color: "white",
+                  opacity: saving ? 0.6 : 1,
+                }}
+              >
+                {saving ? "Saving…" : "Save expense"}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+    </main>
   );
 }
