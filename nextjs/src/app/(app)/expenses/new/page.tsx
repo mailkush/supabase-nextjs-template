@@ -152,7 +152,7 @@ function ScanReceiptDraft(props: {
             ref={fileInputRef}
             type="file"
             accept="image/*"
-            capture="environment"
+            // ✅ IMPORTANT: removed capture="environment" so iPhone allows Camera Roll + Camera
             style={{ display: "none" }}
             disabled={busy}
             onChange={(e) => onPick(e.target.files?.[0] ?? null)}
@@ -366,7 +366,10 @@ export default function NewExpensePage() {
         <>
           <ScanReceiptDraft categories={categories} accounts={accounts} onApply={onApplyDraft} />
 
-          <form onSubmit={onSave} style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}>
+          <form
+            onSubmit={onSave}
+            style={{ border: "1px solid #e7e7e7", borderRadius: 16, padding: 12, background: "white" }}
+          >
             <div style={{ fontWeight: 900, marginBottom: 10 }}>New expense</div>
 
             <div style={{ display: "grid", gap: 10 }}>
