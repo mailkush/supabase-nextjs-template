@@ -1,5 +1,3 @@
-console.log("Has OPENAI key:", Boolean(process.env.OPENAI_API_KEY));
-
 import { NextResponse } from "next/server";
 
 type CategoryLite = { id: string; name: string };
@@ -25,8 +23,16 @@ function jsonError(message: string, status = 400) {
 
 export async function POST(req: Request) {
   try {
+    // ✅ Debug in function runtime (safe: does NOT print the key)
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return jsonError("Missing OPENAI_API_KEY on server", 500);
+    console.log("OPENAI_API_KEY present?", Boolean(apiKey), "len=", apiKey ? apiKey.length : 0);
+
+    if (!apiKey) {
+      return jsonError(
+        "Missing OPENAI_API_KEY on server. Add it in Vercel Project → Settings → Environment Variables (Production + Preview) and redeploy.",
+        500
+      );
+    }
 
     const body: unknown = await req.json();
     if (!isRecord(body)) return jsonError("Invalid JSON body");
@@ -37,7 +43,7 @@ export async function POST(req: Request) {
 
     if (!imageDataUrl) return jsonError("imageDataUrl is required");
 
-    // Very small guardrail: only accept data URLs for images
+    // Guardrail: only accept data URLs for images
     if (!imageDataUrl.startsWith("data:image/")) return jsonError("imageDataUrl must be a data:image/* URL");
 
     const system = `
@@ -62,7 +68,6 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
       task: "Extract best-guess draft expense from this receipt image.",
     };
 
-    // Call OpenAI Responses API via fetch (no SDK dependency)
     const resp = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -81,7 +86,7 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
             ],
           },
         ],
-        // Force JSON output (important for guardrails)
+        // Force JSON output
         text: { format: { type: "json_object" } },
       }),
     });
@@ -94,7 +99,6 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
     const data: unknown = await resp.json();
     if (!isRecord(data)) return jsonError("Bad response from OpenAI", 500);
 
-    // Responses API returns output text in different shapes; simplest is to read `output_text` if present.
     const outputText =
       typeof (data as { output_text?: unknown }).output_text === "string"
         ? String((data as { output_text?: unknown }).output_text)
@@ -102,7 +106,6 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
 
     if (!outputText) return jsonError("OpenAI returned no output_text", 500);
 
-    // Parse the JSON string
     let parsed: unknown;
     try {
       parsed = JSON.parse(outputText);
@@ -110,7 +113,6 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
       return jsonError("Model did not return valid JSON", 500);
     }
 
-    // Light validation/sanitization
     if (!isRecord(parsed)) return jsonError("Draft JSON is invalid", 500);
 
     const draft: DraftExpense = {
@@ -126,7 +128,7 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((x) => String(x)) : [],
     };
 
-    // Ensure chosen ids are valid (guardrail)
+    // Guardrail: Ensure ids are valid
     const validCatIds = new Set(categories.map((c) => c.id));
     const validAccIds = new Set(accounts.map((a) => a.id));
 
