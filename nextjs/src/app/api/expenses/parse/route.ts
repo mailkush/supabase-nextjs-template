@@ -21,6 +21,47 @@ function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+/**
+ * Responses API can return text in different shapes.
+ * Prefer:
+ * - data.output_text (if present)
+ * Else:
+ * - walk data.output[].content[] and concatenate content items of type "output_text" or "summary_text"
+ */
+function extractResponseText(data: unknown): string | null {
+  if (!isRecord(data)) return null;
+
+  // 1) easiest path
+  const direct = (data as { output_text?: unknown }).output_text;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  // 2) walk output blocks
+  const out = (data as { output?: unknown }).output;
+  if (!Array.isArray(out)) return null;
+
+  const parts: string[] = [];
+
+  for (const item of out) {
+    if (!isRecord(item)) continue;
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+
+    for (const c of content) {
+      if (!isRecord(c)) continue;
+
+      const type = (c as { type?: unknown }).type;
+      const text = (c as { text?: unknown }).text;
+
+      if ((type === "output_text" || type === "summary_text") && typeof text === "string" && text.trim()) {
+        parts.push(text.trim());
+      }
+    }
+  }
+
+  const joined = parts.join("\n").trim();
+  return joined ? joined : null;
+}
+
 export async function POST(req: Request) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -76,7 +117,7 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
             ],
           },
         ],
-        // force structured JSON
+        // ask for strict JSON
         text: { format: { type: "json_object" } },
       }),
     });
@@ -87,20 +128,20 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
     }
 
     const data: unknown = await resp.json();
-    if (!isRecord(data)) return jsonError("Bad response from OpenAI", 500);
 
-    const outputText =
-      typeof (data as { output_text?: unknown }).output_text === "string"
-        ? String((data as { output_text?: unknown }).output_text)
-        : null;
+    const outputText = extractResponseText(data);
+    if (!outputText) {
+      // helpful debug (safe): return the keys we got
+      const keys = isRecord(data) ? Object.keys(data).join(", ") : "not-an-object";
+      return jsonError(`OpenAI returned no readable text. Response keys: ${keys}`, 500);
+    }
 
-    if (!outputText) return jsonError("OpenAI returned no output_text", 500);
-
+    // Parse the JSON string
     let parsed: unknown;
     try {
       parsed = JSON.parse(outputText);
     } catch {
-      return jsonError("Model did not return valid JSON", 500);
+      return jsonError(`Model did not return valid JSON. Got: ${outputText.slice(0, 300)}`, 500);
     }
 
     if (!isRecord(parsed)) return jsonError("Draft JSON is invalid", 500);
