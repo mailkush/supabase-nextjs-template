@@ -1,6 +1,4 @@
-// src/app/api/expenses/parse/route.ts
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
 
 type CategoryLite = { id: string; name: string };
 type AccountLite = { id: string; name: string; type: string };
@@ -11,138 +9,140 @@ type DraftExpense = {
   description: string | null;
   category_id: string | null;
   account_id: string | null;
-
-  // guardrails / UX
   confidence: "high" | "medium" | "low";
   warnings: string[];
 };
 
-function isISODate(s: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(s);
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
 }
 
-function clampAmount(n: number) {
-  // Safety clamp; tweak as you like
-  if (!Number.isFinite(n)) return null;
-  if (n < 0) return null;
-  if (n > 5_00_000) return null; // ₹5L cap to prevent wild hallucinations
-  return Math.round(n);
-}
-
-function normalizeDraft(x: any): DraftExpense {
-  const warnings: string[] = [];
-
-  const amountRaw = typeof x?.amount === "number" ? x.amount : null;
-  const amount = amountRaw === null ? null : clampAmount(amountRaw);
-  if (amountRaw !== null && amount === null) warnings.push("Amount looked invalid/out of range; please verify.");
-
-  const dateRaw = typeof x?.expense_date === "string" ? x.expense_date : null;
-  const expense_date = dateRaw && isISODate(dateRaw) ? dateRaw : null;
-  if (dateRaw && !expense_date) warnings.push("Date wasn’t in YYYY-MM-DD format; please verify.");
-
-  const description = typeof x?.description === "string" ? x.description.trim() || null : null;
-
-  const category_id = typeof x?.category_id === "string" ? x.category_id : null;
-  const account_id = typeof x?.account_id === "string" ? x.account_id : null;
-
-  const confidence: DraftExpense["confidence"] =
-    x?.confidence === "high" || x?.confidence === "medium" || x?.confidence === "low" ? x.confidence : "low";
-
-  const w = Array.isArray(x?.warnings) ? x.warnings.filter((s: any) => typeof s === "string") : [];
-  return {
-    amount,
-    expense_date,
-    description,
-    category_id,
-    account_id,
-    confidence,
-    warnings: [...w, ...warnings],
-  };
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return jsonError("Missing OPENAI_API_KEY on server", 500);
 
-    const imageDataUrl = String(body?.imageDataUrl || "");
-    const categories = (body?.categories || []) as CategoryLite[];
-    const accounts = (body?.accounts || []) as AccountLite[];
+    const body: unknown = await req.json();
+    if (!isRecord(body)) return jsonError("Invalid JSON body");
 
-    if (!imageDataUrl.startsWith("data:image/")) {
-      return NextResponse.json({ error: "Invalid imageDataUrl (expected data:image/...)" }, { status: 400 });
-    }
+    const imageDataUrl = typeof body.imageDataUrl === "string" ? body.imageDataUrl : null;
+    const categories = Array.isArray(body.categories) ? (body.categories as CategoryLite[]) : [];
+    const accounts = Array.isArray(body.accounts) ? (body.accounts as AccountLite[]) : [];
 
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    if (!imageDataUrl) return jsonError("imageDataUrl is required");
+
+    // Very small guardrail: only accept data URLs for images
+    if (!imageDataUrl.startsWith("data:image/")) return jsonError("imageDataUrl must be a data:image/* URL");
 
     const system = `
-You are extracting an expense from a receipt/screenshot for a personal finance app.
-
-Return ONLY valid JSON (no markdown, no commentary) matching this schema:
-{
-  "amount": number|null,
-  "expense_date": "YYYY-MM-DD"|null,
-  "description": string|null,
-  "category_id": string|null,
-  "account_id": string|null,
-  "confidence": "high"|"medium"|"low",
-  "warnings": string[]
-}
+You are extracting a single expense from a receipt image.
+Return STRICT JSON only. No markdown. No explanations.
 
 Rules:
-- amount: prefer TOTAL PAID / GRAND TOTAL. If multiple totals exist, pick the final payable. If unclear, null + warning.
-- expense_date: must be YYYY-MM-DD. If only partial date, null + warning.
-- description: short merchant + context (e.g. "Starbucks - coffee", "Amazon - household items").
-- category_id: choose best match from the provided categories list; otherwise null. Do NOT invent ids.
-- account_id: choose best match ONLY if the image explicitly indicates the account/card/wallet; else null.
-- confidence: high only if amount+date are clear.
-- Always include warnings if anything is uncertain.
-`.trim();
+- amount: number (INR) OR null if unsure
+- expense_date: YYYY-MM-DD OR null if unsure
+- description: short merchant + items summary (max ~80 chars) OR null
+- category_id: must be one of the provided categories' ids OR null
+- account_id: must be one of the provided accounts' ids OR null
+- confidence: "high" | "medium" | "low"
+- warnings: array of strings with any issues/assumptions (empty if none)
 
-    const catList = categories.map((c) => ({ id: c.id, name: c.name }));
-    const accList = accounts.map((a) => ({ id: a.id, name: a.name, type: a.type }));
+Be conservative. If unsure, use null + add warnings + lower confidence.
+`;
 
-    const userText = `
-Extract the expense from this image.
+    const user = {
+      categories,
+      accounts,
+      task: "Extract best-guess draft expense from this receipt image.",
+    };
 
-Allowed categories (pick category_id from this list only):
-${JSON.stringify(catList)}
-
-Allowed accounts (pick account_id from this list only; otherwise null):
-${JSON.stringify(accList)}
-`.trim();
-
-    // The official quickstart shows image input via `input_image`.  [oai_citation:1‡OpenAI Platform](https://platform.openai.com/docs/quickstart)
-    const resp = await client.responses.create({
-      model: "gpt-5",
-      input: [
-        {
-          role: "system",
-          content: [{ type: "input_text", text: system }],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: userText },
-            { type: "input_image", image_url: imageDataUrl },
-          ],
-        },
-      ],
+    // Call OpenAI Responses API via fetch (no SDK dependency)
+    const resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        input: [
+          { role: "system", content: [{ type: "text", text: system }] },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: JSON.stringify(user) },
+              { type: "input_image", image_url: imageDataUrl },
+            ],
+          },
+        ],
+        // Force JSON output (important for guardrails)
+        text: { format: { type: "json_object" } },
+      }),
     });
 
-    const raw = resp.output_text || "";
-    let parsed: any;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return NextResponse.json(
-        { error: "Model did not return valid JSON", raw },
-        { status: 502 }
-      );
+    if (!resp.ok) {
+      const errText = await resp.text();
+      return jsonError(`OpenAI error: ${errText}`, 500);
     }
 
-    const draft = normalizeDraft(parsed);
-    return NextResponse.json({ draft }, { status: 200 });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Unknown error" }, { status: 500 });
+    const data: unknown = await resp.json();
+    if (!isRecord(data)) return jsonError("Bad response from OpenAI", 500);
+
+    // Responses API returns output text in different shapes; simplest is to read `output_text` if present.
+    const outputText =
+      typeof (data as { output_text?: unknown }).output_text === "string"
+        ? String((data as { output_text?: unknown }).output_text)
+        : null;
+
+    if (!outputText) return jsonError("OpenAI returned no output_text", 500);
+
+    // Parse the JSON string
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(outputText);
+    } catch {
+      return jsonError("Model did not return valid JSON", 500);
+    }
+
+    // Light validation/sanitization
+    if (!isRecord(parsed)) return jsonError("Draft JSON is invalid", 500);
+
+    const draft: DraftExpense = {
+      amount: typeof parsed.amount === "number" ? parsed.amount : null,
+      expense_date: typeof parsed.expense_date === "string" ? parsed.expense_date : null,
+      description: typeof parsed.description === "string" ? parsed.description : null,
+      category_id: typeof parsed.category_id === "string" ? parsed.category_id : null,
+      account_id: typeof parsed.account_id === "string" ? parsed.account_id : null,
+      confidence:
+        parsed.confidence === "high" || parsed.confidence === "medium" || parsed.confidence === "low"
+          ? parsed.confidence
+          : "low",
+      warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((x) => String(x)) : [],
+    };
+
+    // Ensure chosen ids are valid (guardrail)
+    const validCatIds = new Set(categories.map((c) => c.id));
+    const validAccIds = new Set(accounts.map((a) => a.id));
+
+    if (draft.category_id && !validCatIds.has(draft.category_id)) {
+      draft.warnings.push("Model suggested a category_id that is not in the allowed list; set to null.");
+      draft.category_id = null;
+      draft.confidence = "low";
+    }
+
+    if (draft.account_id && !validAccIds.has(draft.account_id)) {
+      draft.warnings.push("Model suggested an account_id that is not in the allowed list; set to null.");
+      draft.account_id = null;
+      draft.confidence = "low";
+    }
+
+    return NextResponse.json({ draft });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Server error";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
