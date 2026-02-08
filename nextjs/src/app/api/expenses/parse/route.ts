@@ -1,3 +1,5 @@
+console.log("Has OPENAI key:", Boolean(process.env.OPENAI_API_KEY));
+
 import { NextResponse } from "next/server";
 
 type CategoryLite = { id: string; name: string };
