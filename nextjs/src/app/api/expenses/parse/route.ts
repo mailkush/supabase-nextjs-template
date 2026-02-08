@@ -23,16 +23,8 @@ function jsonError(message: string, status = 400) {
 
 export async function POST(req: Request) {
   try {
-    // ✅ Debug in function runtime (safe: does NOT print the key)
     const apiKey = process.env.OPENAI_API_KEY;
-    console.log("OPENAI_API_KEY present?", Boolean(apiKey), "len=", apiKey ? apiKey.length : 0);
-
-    if (!apiKey) {
-      return jsonError(
-        "Missing OPENAI_API_KEY on server. Add it in Vercel Project → Settings → Environment Variables (Production + Preview) and redeploy.",
-        500
-      );
-    }
+    if (!apiKey) return jsonError("Missing OPENAI_API_KEY on server", 500);
 
     const body: unknown = await req.json();
     if (!isRecord(body)) return jsonError("Invalid JSON body");
@@ -42,8 +34,6 @@ export async function POST(req: Request) {
     const accounts = Array.isArray(body.accounts) ? (body.accounts as AccountLite[]) : [];
 
     if (!imageDataUrl) return jsonError("imageDataUrl is required");
-
-    // Guardrail: only accept data URLs for images
     if (!imageDataUrl.startsWith("data:image/")) return jsonError("imageDataUrl must be a data:image/* URL");
 
     const system = `
@@ -60,7 +50,7 @@ Rules:
 - warnings: array of strings with any issues/assumptions (empty if none)
 
 Be conservative. If unsure, use null + add warnings + lower confidence.
-`;
+`.trim();
 
     const user = {
       categories,
@@ -77,16 +67,16 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
       body: JSON.stringify({
         model: "gpt-4.1-mini",
         input: [
-          { role: "system", content: [{ type: "text", text: system }] },
+          { role: "system", content: [{ type: "input_text", text: system }] },
           {
             role: "user",
             content: [
-              { type: "text", text: JSON.stringify(user) },
+              { type: "input_text", text: JSON.stringify(user) },
               { type: "input_image", image_url: imageDataUrl },
             ],
           },
         ],
-        // Force JSON output
+        // force structured JSON
         text: { format: { type: "json_object" } },
       }),
     });
@@ -128,18 +118,18 @@ Be conservative. If unsure, use null + add warnings + lower confidence.
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((x) => String(x)) : [],
     };
 
-    // Guardrail: Ensure ids are valid
+    // Guardrail: ensure IDs are from allowed list
     const validCatIds = new Set(categories.map((c) => c.id));
     const validAccIds = new Set(accounts.map((a) => a.id));
 
     if (draft.category_id && !validCatIds.has(draft.category_id)) {
-      draft.warnings.push("Model suggested a category_id that is not in the allowed list; set to null.");
+      draft.warnings.push("Model suggested a category_id not in allowed list; set to null.");
       draft.category_id = null;
       draft.confidence = "low";
     }
 
     if (draft.account_id && !validAccIds.has(draft.account_id)) {
-      draft.warnings.push("Model suggested an account_id that is not in the allowed list; set to null.");
+      draft.warnings.push("Model suggested an account_id not in allowed list; set to null.");
       draft.account_id = null;
       draft.confidence = "low";
     }
